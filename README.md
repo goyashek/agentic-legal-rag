@@ -60,7 +60,7 @@ API -> `http://localhost:8000` · Frontend -> `http://localhost:8501`
 
 ## Data & licensing
 
-- **Corpus:** BNS / BNSS / BSA gazette PDFs into `data/raw/` (not committed; document sourcing here).
+- **Corpus:** BNS / BNSS / BSA bare-act PDFs in `data/raw/` (not committed — Govt-of-India copyright, ingested for retrieval/eval, not redistributed). Source the enacted acts from **[India Code](https://indiacode.nic.in)** (the official portal): Bharatiya Nyaya Sanhita 2023 (Act 45, **358 sections**), Bharatiya Nagarik Suraksha Sanhita 2023 (Act 46, **531 sections**), Bharatiya Sakshya Adhiniyam 2023 (Act 47, **170 sections**). Save them as `bns.pdf`, `bnss.pdf`, `bsa.pdf`. The parser verifies the parsed section count against these published totals (all land exact). The **IPC→BNS / CrPC→BNSS / Evidence→BSA** correspondence tables (for the old-code bridge) come from the MHA "three new criminal laws" comparison summaries — save the BNS↔IPC one as `COMPARISON SUMMARY BNS to IPC .pdf`. cognizable/bailable flags are parsed from the BNSS First Schedule.
 - **Eval datasets** (gated, need `HF_TOKEN`):
   - `opennyaiorg/aibe_dataset`: AIBE 4-16, **CC BY-ND-4.0**, evaluation-only (no redistribution of modified copies).
   - `bharatgenai/BhashaBench-Legal`: **CC BY-4.0**, criminal-law slice used for robustness.
