@@ -14,7 +14,7 @@ dependencies = [
     "langchain-core>=0.3",
     "langchain-google-genai>=2.0",   # Gemini 2.5 Flash/Pro (D2)
     # --- ingestion / chunking ---
-    "chonkie[qdrant]>=0.4",          # SemanticChunker + native QdrantHandshake (replaces my old regex splitter)
+    "chonkie[qdrant,model2vec,st]>=0.4",  # SemanticChunker + native QdrantHandshake. model2vec = potion-base-8M backbone (locked stack; without it Chonkie silently falls back to a sentence-transformer). st = fallback embeddings.
     "pymupdf>=1.24",                 # gazette PDF parsing
     # --- retrieval ---
     "qdrant-client>=1.12",           # vector DB (native hybrid)
