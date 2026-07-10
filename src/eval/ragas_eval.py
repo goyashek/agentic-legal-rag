@@ -24,7 +24,8 @@ class RagasScores:
     context_precision: float
     context_recall: float
     n_scenarios: int
-    per_difficulty: dict[str, dict[str, float]] = field(default_factory=dict)  # easy/medium/hard breakdown
+    # easy/medium/hard breakdown
+    per_difficulty: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 def load_scenarios(path: str | Path = "data/eval/scenarios.jsonl") -> list[dict]:

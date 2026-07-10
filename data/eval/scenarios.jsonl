@@ -1,0 +1,10 @@
+{"id": "s01", "query": "someone stabbed a man and he died on the spot", "relevant_sections": ["BNS::100", "BNS::101", "BNS::103"], "difficulty": "easy", "note": "culpable homicide / murder + punishment"}
+{"id": "s02", "query": "my motorcycle was stolen from outside my house", "relevant_sections": ["BNS::303"], "difficulty": "easy", "note": "theft"}
+{"id": "s03", "query": "a shopkeeper tricked me into paying for a fake gold chain", "relevant_sections": ["BNS::318"], "difficulty": "easy", "note": "cheating"}
+{"id": "s04", "query": "three men threatened me with a knife and took my wallet on the street", "relevant_sections": ["BNS::304", "BNS::309", "BNS::310"], "difficulty": "medium", "note": "snatching / robbery / dacoity"}
+{"id": "s05", "query": "my husband and his mother keep harassing me for dowry and beat me", "relevant_sections": ["BNS::85", "BNS::80"], "difficulty": "medium", "note": "cruelty by husband/relative + dowry death context"}
+{"id": "s06", "query": "a man forced himself on a woman against her will", "relevant_sections": ["BNS::63", "BNS::64"], "difficulty": "easy", "note": "rape + punishment"}
+{"id": "s07", "query": "someone kept sending me messages threatening to kill me if I complained", "relevant_sections": ["BNS::351"], "difficulty": "medium", "note": "criminal intimidation"}
+{"id": "s08", "query": "an accountant I trusted with company funds secretly kept the money for himself", "relevant_sections": ["BNS::316"], "difficulty": "medium", "note": "criminal breach of trust"}
+{"id": "s09", "query": "a group planned together in secret to rob a bank next week", "relevant_sections": ["BNS::61"], "difficulty": "hard", "note": "criminal conspiracy (planning, offence not yet done)"}
+{"id": "s10", "query": "a newspaper printed false claims that ruined my reputation", "relevant_sections": ["BNS::356"], "difficulty": "medium", "note": "defamation"}
