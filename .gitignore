@@ -1,0 +1,45 @@
+# --- secrets ---
+.env
+*.key
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# --- tooling caches ---
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# --- uv / poetry ---
+# keep uv.lock committed for reproducibility; ignore poetry venvs
+.poetry/
+
+# --- data artifacts ---
+# raw statute PDFs: large / redistribution-sensitive, keep out of git, document sourcing in README
+data/raw/*
+!data/raw/.gitkeep
+# processed chunks + indices: regenerate from source
+data/processed/*
+!data/processed/.gitkeep
+# eval: keep hand-labeled scenarios.jsonl in git; ignore downloaded gated datasets
+data/eval/*
+!data/eval/.gitkeep
+!data/eval/scenarios.jsonl
+
+# --- local qdrant storage (if bind-mounted) ---
+qdrant_storage/
+
+# --- os ---
+.DS_Store
+
+# --- local planning/notes docs: keep out of git, only README is tracked ---
+*.md
+!README.md
+

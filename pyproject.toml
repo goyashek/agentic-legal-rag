@@ -1,0 +1,62 @@
+[project]
+name = "agentic-legal-rag"
+version = "0.1.0"
+description = "Agentic, self-correcting RAG for Indian criminal law (BNS/BNSS/BSA) with hybrid retrieval, a deterministic citation validator, and dual evaluation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# core deps. lower bounds are documented in NOTES.md.
+# resolve to a lockfile (`uv lock` / `uv sync`) before install so builds are reproducible.
+dependencies = [
+    # --- agent orchestration ---
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "langchain-google-genai>=2.0",   # Gemini 2.5 Flash/Pro (D2)
+    # --- ingestion / chunking ---
+    "chonkie[qdrant]>=0.4",          # SemanticChunker + native QdrantHandshake (replaces my old regex splitter)
+    "pymupdf>=1.24",                 # gazette PDF parsing
+    # --- retrieval ---
+    "qdrant-client>=1.12",           # vector DB (native hybrid)
+    "rank-bm25>=0.2.2",              # in-process sparse (~1k chunks)
+    "sentence-transformers>=3.0",    # bge-large-en-v1.5 embeddings + bge-reranker-base
+    # --- structured output ---
+    "pydantic>=2.9",
+    "instructor>=1.6",
+    # --- eval ---
+    "ragas>=0.2",                    # RAGAS 50-scenario diagnostics
+    "datasets>=3.0",                 # load AIBE / BhashaBench slices from HuggingFace
+    # --- api / frontend ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "streamlit>=1.40",
+    # --- observability / config ---
+    "langsmith>=0.1",                # LangGraph tracing
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "jupyter>=1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # pycodestyle, pyflakes, isort, pyupgrade, bugbear
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
