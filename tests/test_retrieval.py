@@ -1,20 +1,29 @@
 """Tests for the retrieval layer.
 
-I'm testing the pure functions (no I/O, no LLM) first and hardest since they're the
-deterministic core and CI can run them without any secrets: reciprocal_rank_fusion
-(the RRF math) and the eval metrics (section_precision_at_k, section_recall,
-citation_accuracy).
+Two tiers, same pattern as the ingest tests:
+  - Pure-function tests (RRF math, tokenizer, deterministic point ids) run always,
+    no models, no index, CI-safe. RRF is the deterministic core so it gets the
+    hardest tests.
+  - Integration tests build against the real Qdrant + BM25 indices and the bge
+    models; they skip cleanly when the indices aren't present (they're git-ignored,
+    regenerated from source).
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from src.retrieval.hybrid import reciprocal_rank_fusion
+from src.retrieval.index import point_id_for, tokenize
+
+PROCESSED = Path(__file__).resolve().parent.parent / "data" / "processed"
+QDRANT_DIR = PROCESSED / "qdrant"
+BM25_PKL = PROCESSED / "bm25.pkl"
 
 
 class TestReciprocalRankFusion:
-    @pytest.mark.skip(reason="Week 1 Thu: implement reciprocal_rank_fusion first")
     def test_agreeing_rankings_rank_shared_top_first(self) -> None:
         """A chunk ranked #1 in both dense and sparse should top the fused list."""
         dense = ["a", "b", "c"]
@@ -22,13 +31,114 @@ class TestReciprocalRankFusion:
         fused = reciprocal_rank_fusion(dense, sparse, k=60)
         assert fused[0][0] == "a"
 
-    @pytest.mark.skip(reason="Week 1 Thu")
     def test_score_uses_k_smoothing(self) -> None:
-        """RRF score for rank-0 in both lists == 2/(k+1) with k=60."""
+        """RRF score for rank-0 in both lists == 2/k with k=60 (rank is 0-based)."""
         fused = dict(reciprocal_rank_fusion(["a"], ["a"], k=60))
-        assert fused["a"] == pytest.approx(2 / 61)
+        assert fused["a"] == pytest.approx(2 / 60)
+
+    def test_chunk_in_one_list_only(self) -> None:
+        fused = dict(reciprocal_rank_fusion(["a", "b"], ["c"], k=60))
+        assert fused["b"] == pytest.approx(1 / 61)
+        assert fused["c"] == pytest.approx(1 / 60)
+
+    def test_sorted_descending_by_score(self) -> None:
+        fused = reciprocal_rank_fusion(["a", "b", "c"], ["a", "b", "c"], k=60)
+        scores = [s for _, s in fused]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_ties_broken_deterministically_by_id(self) -> None:
+        """Two chunks with equal score come back in stable (id-sorted) order."""
+        fused = reciprocal_rank_fusion(["x"], ["y"], k=60)  # both score 1/60
+        assert [cid for cid, _ in fused] == ["x", "y"]
+
+    def test_empty_inputs(self) -> None:
+        assert reciprocal_rank_fusion([], [], k=60) == []
+
+    def test_k_changes_scores(self) -> None:
+        small_k = dict(reciprocal_rank_fusion(["a"], [], k=10))
+        big_k = dict(reciprocal_rank_fusion(["a"], [], k=1000))
+        assert small_k["a"] > big_k["a"]
 
 
-class TestHybridRetriever:
-    @pytest.mark.skip(reason="Week 1 Thu: needs a Qdrant fixture / stub")
-    def test_retrieve_returns_scored_chunks(self) -> None: ...
+class TestTokenize:
+    def test_lowercases_and_splits_alnum(self) -> None:
+        assert tokenize("BNS Section 103: Murder!") == ["bns", "section", "103", "murder"]
+
+    def test_drops_punctuation_and_dashes(self) -> None:
+        assert tokenize("non-bailable, cognizable.") == ["non", "bailable", "cognizable"]
+
+    def test_empty(self) -> None:
+        assert tokenize("   ") == []
+
+
+class TestPointId:
+    def test_deterministic(self) -> None:
+        assert point_id_for("BNS::103::0") == point_id_for("BNS::103::0")
+
+    def test_distinct_ids_differ(self) -> None:
+        assert point_id_for("BNS::103::0") != point_id_for("BNS::103::1")
+
+
+@pytest.mark.skipif(
+    not (QDRANT_DIR.exists() and BM25_PKL.exists()),
+    reason="retrieval indices not built; run src/retrieval/index.py",
+)
+class TestHybridRetrieverIntegration:
+    """End-to-end retrieval against the real indices + bge models.
+
+    These are the real proof the plumbing works: a plain-language query about a crime
+    should surface the right BNS section near the top.
+    """
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def retriever(cls):
+        from src.retrieval.hybrid import HybridRetriever
+
+        return HybridRetriever(collection="legal", bm25_path=str(BM25_PKL))
+
+    def test_retrieve_returns_scored_chunks(self, retriever) -> None:
+        results = retriever.retrieve("someone was murdered", top_k=10)
+        assert results
+        top = results[0]
+        assert top.rrf_score > 0
+        # scores are attributed so the ablation has signal to work with
+        assert top.dense_rank is not None or top.sparse_rank is not None
+
+    def test_murder_query_surfaces_section_103(self, retriever) -> None:
+        results = retriever.retrieve("what is the punishment for murder", top_k=10)
+        section_ids = {r.chunk.section_id for r in results if r.chunk.act == "BNS"}
+        assert "103" in section_ids
+
+    def test_theft_query_surfaces_theft_sections(self, retriever) -> None:
+        results = retriever.retrieve("my bike was stolen", top_k=10)
+        headings = " ".join(r.chunk.heading.lower() for r in results)
+        assert "theft" in headings
+
+    def test_results_capped_at_top_k(self, retriever) -> None:
+        assert len(retriever.retrieve("criminal breach of trust", top_k=5)) <= 5
+
+
+@pytest.mark.skipif(
+    not (QDRANT_DIR.exists() and BM25_PKL.exists()),
+    reason="retrieval indices not built",
+)
+class TestRerankerIntegration:
+    def test_rerank_reorders_and_caps(self) -> None:
+        from src.retrieval.hybrid import HybridRetriever
+        from src.retrieval.rerank import Reranker
+
+        retriever = HybridRetriever(collection="legal", bm25_path=str(BM25_PKL))
+        candidates = retriever.retrieve("punishment for murder", top_k=20)
+        reranked = Reranker().rerank("punishment for murder", candidates, top_k=8)
+
+        assert len(reranked) <= 8
+        assert all(r.rerank_score is not None for r in reranked)
+        # sorted by rerank score desc
+        scores = [r.rerank_score for r in reranked]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_rerank_empty_candidates(self) -> None:
+        from src.retrieval.rerank import Reranker
+
+        assert Reranker().rerank("anything", []) == []
