@@ -60,3 +60,10 @@ select = ["E", "F", "I", "UP", "B"]   # pycodestyle, pyflakes, isort, pyupgrade,
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Live tests hit real Gemini (quota + RPM limits), so exclude them by default:
+# the full suite runs keyless and quota-free. Opt in with `pytest -m live` (needs a
+# key in .env) — pace those runs against the flash-tier RPM cap. See NOTES.md.
+addopts = "-m 'not live'"
+markers = [
+    "live: test makes a real Gemini API call (opt-in; excluded by default)",
+]

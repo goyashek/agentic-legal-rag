@@ -18,11 +18,13 @@ import pytest
 from langgraph.graph import END
 
 from src.agent.graph import (
+    RETRIEVAL_LOOP_BUDGET,
     _dedupe_by_chunk_id,
     answer_query,
     build_graph,
     retrieve_node,
     route_after_fast_path,
+    route_after_grader,
     route_after_ood_gate,
     route_after_router,
 )
@@ -86,8 +88,25 @@ class TestRoutingFunctions:
     def test_ood_routes_to_not_in_corpus(self) -> None:
         assert route_after_ood_gate({"ood": True}) == "not_in_corpus"
 
-    def test_in_corpus_continues(self) -> None:
-        assert route_after_ood_gate({"ood": False}) == END
+    def test_in_corpus_goes_to_grader(self) -> None:
+        assert route_after_ood_gate({"ood": False}) == "grader"
+
+    def test_grade_pass_goes_to_end(self) -> None:
+        # pass path ends at END for now; generator lands Thu
+        assert route_after_grader({"grade_pass": True}) == END
+
+    def test_grade_fail_within_budget_rewrites(self) -> None:
+        assert route_after_grader({"grade_pass": False, "iteration": 0}) == "rewriter"
+        assert (
+            route_after_grader({"grade_pass": False, "iteration": RETRIEVAL_LOOP_BUDGET - 1})
+            == "rewriter"
+        )
+
+    def test_grade_fail_budget_spent_goes_low_confidence(self) -> None:
+        assert (
+            route_after_grader({"grade_pass": False, "iteration": RETRIEVAL_LOOP_BUDGET})
+            == "low_confidence"
+        )
 
 
 class TestRetrieveNode:
@@ -150,6 +169,7 @@ class TestFastPathEndToEnd:
         assert state["fast_path_answer"].citations[0].section_id == "103"
 
 
+@pytest.mark.live
 @pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
 class TestRouterEndToEnd:
     """Narrative query misses the fast path and flows through the live router."""
@@ -161,6 +181,7 @@ class TestRouterEndToEnd:
         assert state["answer"].in_corpus is False
 
 
+@pytest.mark.live
 @pytest.mark.skipif(
     not (_have_full_index and has_api_key()),
     reason="needs both the built Qdrant index and GEMINI_API_KEY",

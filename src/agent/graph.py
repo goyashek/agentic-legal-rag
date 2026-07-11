@@ -69,14 +69,25 @@ def route_after_router(state: AgentState) -> str:
 
 
 def route_after_ood_gate(state: AgentState) -> str:
-    """out-of-domain -> canned 'not in corpus' answer; in-corpus -> continue.
-
-    The grader lands Wed; until then the in-corpus path ends here (retrieval is
-    proven, generation isn't wired yet).
-    """
+    """out-of-domain -> canned 'not in corpus' answer; in-corpus -> grade the chunks."""
     if state.get("ood"):
         return "not_in_corpus"
-    return END  # TODO(Wed): -> "grader"
+    return "grader"
+
+
+def route_after_grader(state: AgentState) -> str:
+    """>= 3 relevant -> generation; else rewrite + re-retrieve until the budget runs out.
+
+    iteration counts rewrites done so far (rewriter bumps it). While it's below the
+    budget we loop back through the rewriter; once it's spent we stop with a
+    low-confidence answer rather than spinning. The pass path ends at END for now —
+    the generator lands Thu.
+    """
+    if state.get("grade_pass"):
+        return END  # TODO(Thu): -> "generator"
+    if state.get("iteration", 0) < RETRIEVAL_LOOP_BUDGET:
+        return "rewriter"
+    return "low_confidence"
 
 
 # --- orchestration node (lives here, not nodes/, since it drives the retrieval
@@ -177,6 +188,29 @@ def not_in_corpus_node(state: AgentState) -> AgentState:
     return {"answer": answer, "trace_notes": [*notes, "not_in_corpus: OOD terminal"]}
 
 
+def low_confidence_node(state: AgentState) -> AgentState:
+    """Terminal for a spent loop budget: return what we have, flagged low-confidence.
+
+    Reached when the grader keeps failing after RETRIEVAL_LOOP_BUDGET rewrites (Thu
+    onward the citation validator / checker also route here). No generator yet, so
+    this hands back the best relevant chunks as a partial, honest about the low
+    confidence rather than fabricating a clean answer.
+    """
+    from src.models.schemas import LegalAdvice
+
+    notes = state.get("trace_notes", [])
+    answer = LegalAdvice(
+        query=state["query"],
+        answer=(
+            "I couldn't retrieve enough clearly on-point sections to answer this "
+            "confidently. Try naming the specific offence or act, or rephrasing."
+        ),
+        confidence="low",
+        in_corpus=True,
+    )
+    return {"answer": answer, "trace_notes": [*notes, "low_confidence: loop budget spent"]}
+
+
 # --- graph assembly ----------------------------------------------------------
 
 
@@ -188,8 +222,10 @@ def build_graph():
     above already name the intended targets.
     """
     from src.agent.nodes.fast_path import fast_path_node
+    from src.agent.nodes.grader import grader_node
     from src.agent.nodes.intent_expander import intent_expander_node
     from src.agent.nodes.ood_gate import ood_gate_node
+    from src.agent.nodes.rewriter import rewriter_node
     from src.agent.nodes.router import router_node
 
     builder = StateGraph(AgentState)
@@ -198,15 +234,23 @@ def build_graph():
     builder.add_node("intent_expander", intent_expander_node)
     builder.add_node("retrieve", retrieve_node)
     builder.add_node("ood_gate", ood_gate_node)
+    builder.add_node("grader", grader_node)
+    builder.add_node("rewriter", rewriter_node)
     builder.add_node("not_in_corpus", not_in_corpus_node)
+    builder.add_node("low_confidence", low_confidence_node)
 
     builder.add_edge(START, "fast_path")
     builder.add_conditional_edges("fast_path", route_after_fast_path, ["router", END])
     builder.add_conditional_edges("router", route_after_router, ["intent_expander", END])
     builder.add_edge("intent_expander", "retrieve")
     builder.add_edge("retrieve", "ood_gate")
-    builder.add_conditional_edges("ood_gate", route_after_ood_gate, ["not_in_corpus", END])
+    builder.add_conditional_edges("ood_gate", route_after_ood_gate, ["not_in_corpus", "grader"])
+    builder.add_conditional_edges(
+        "grader", route_after_grader, ["rewriter", "low_confidence", END]
+    )
+    builder.add_edge("rewriter", "retrieve")  # loop back: re-retrieve on the rewritten query
     builder.add_edge("not_in_corpus", END)
+    builder.add_edge("low_confidence", END)
 
     return builder.compile()
 

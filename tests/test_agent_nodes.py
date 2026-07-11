@@ -14,6 +14,7 @@ import pytest
 
 from src.agent.llm import has_api_key
 from src.agent.nodes.fast_path import detect_exact_section, lookup_section
+from src.agent.nodes.grader import GradeVerdict, grade_chunks, grader_node
 from src.agent.nodes.intent_expander import (
     SubQueries,
     _dedupe,
@@ -21,6 +22,7 @@ from src.agent.nodes.intent_expander import (
     intent_expander_node,
 )
 from src.agent.nodes.ood_gate import is_out_of_domain
+from src.agent.nodes.rewriter import RewrittenQuery, rewrite_query, rewriter_node
 from src.agent.nodes.router import RouteDecision, classify, router_node
 from src.ingest.chunk_chonkie import LegalChunk
 from src.retrieval.hybrid import RetrievedChunk
@@ -54,6 +56,44 @@ class _FakeExpanderClient:
         self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is SubQueries
         return SubQueries(sub_queries=self._subs)
+
+
+class _FakeAsyncGraderClient:
+    """Async stand-in for the grader's client: `.create` is awaited.
+
+    Verdicts are keyed by section_id so a test can make specific chunks pass/fail;
+    unknown sections default to `default`. Records call count. Zero quota.
+    """
+
+    def __init__(self, by_section: dict[str, bool], *, default: bool = False) -> None:
+        self._by_section = by_section
+        self._default = default
+        self.n_calls = 0
+
+    async def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
+        self.n_calls += 1
+        assert response_model is GradeVerdict
+        # pull the section id out of the rendered prompt ("... Section <id>: ...")
+        content = messages[0]["content"]
+        relevant = self._default
+        for sid, verdict in self._by_section.items():
+            if f"Section {sid}:" in content:
+                relevant = verdict
+                break
+        return GradeVerdict(relevant=relevant)
+
+
+class _FakeRewriterClient:
+    """Returns a canned rewritten query. Records the rendered prompt. Zero quota."""
+
+    def __init__(self, rewritten: str) -> None:
+        self._rewritten = rewritten
+        self.calls: list[dict] = []
+
+    def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
+        assert response_model is RewrittenQuery
+        return RewrittenQuery(query=self._rewritten)
 
 
 # A tiny IPC->BNS map so the IPC-normalization tests don't need the real PDF.
@@ -173,6 +213,7 @@ class TestRouterUnit:
         assert out["answer"].in_corpus is True
 
 
+@pytest.mark.live
 @pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
 class TestRouterLive:
     """A few live Flash calls to confirm the prompt actually classifies right."""
@@ -215,6 +256,7 @@ class TestIntentExpanderUnit:
         assert any("intent_expander: 2 sub-queries" in n for n in out["trace_notes"])
 
 
+@pytest.mark.live
 @pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
 class TestIntentExpanderLive:
     def test_multi_offence_narrative_expands(self) -> None:
@@ -225,3 +267,97 @@ class TestIntentExpanderLive:
     def test_simple_query_stays_focused(self) -> None:
         subs = expand_intent("what is the punishment for murder")
         assert 1 <= len(subs) <= 3
+
+
+def _chunk(section_id: str) -> RetrievedChunk:
+    """A RetrievedChunk for a given BNS section (for grader fan-out tests)."""
+    c = LegalChunk(f"BNS::{section_id}::0", "BNS", section_id, f"Heading {section_id}", "body text")
+    return RetrievedChunk(chunk=c, rrf_score=0.5)
+
+
+class TestGraderUnit:
+    """Parallel grade + filter against a fake async client — no key, no quota."""
+
+    def test_grade_chunks_keeps_only_relevant(self) -> None:
+        chunks = [_chunk("103"), _chunk("303"), _chunk("318")]
+        fake = _FakeAsyncGraderClient({"103": True, "303": False, "318": True})
+        kept = grade_chunks("murder or cheating", chunks, client=fake)
+        assert [c.chunk.section_id for c in kept] == ["103", "318"]
+        assert fake.n_calls == 3  # one call per chunk (the fan-out)
+
+    def test_grade_chunks_empty_is_no_calls(self) -> None:
+        fake = _FakeAsyncGraderClient({})
+        assert grade_chunks("anything", [], client=fake) == []
+        assert fake.n_calls == 0
+
+    def test_node_grade_pass_true_at_three(self) -> None:
+        chunks = [_chunk("103"), _chunk("303"), _chunk("318")]
+        fake = _FakeAsyncGraderClient({}, default=True)  # all relevant
+        out = grader_node({"query": "q", "retrieved": chunks}, client=fake)
+        assert out["grade_pass"] is True
+        assert len(out["relevant_chunks"]) == 3
+
+    def test_node_grade_pass_false_below_three(self) -> None:
+        chunks = [_chunk("103"), _chunk("303"), _chunk("318")]
+        fake = _FakeAsyncGraderClient({"103": True, "303": True}, default=False)  # only 2
+        out = grader_node({"query": "q", "retrieved": chunks}, client=fake)
+        assert out["grade_pass"] is False
+        assert len(out["relevant_chunks"]) == 2
+        assert any("grader: 2 relevant -> rewrite" in n for n in out["trace_notes"])
+
+
+class TestRewriterUnit:
+    """Rewrite + iteration bump against a fake client — no key, no quota."""
+
+    def test_rewrite_returns_new_query(self) -> None:
+        fake = _FakeRewriterClient("punishment for criminal conspiracy to commit robbery")
+        out = rewrite_query("planning a robbery", reason="low_relevance", client=fake)
+        assert out == "punishment for criminal conspiracy to commit robbery"
+
+    def test_rewrite_falls_back_on_empty(self) -> None:
+        fake = _FakeRewriterClient("   ")
+        assert rewrite_query("original", reason="low_relevance", client=fake) == "original"
+
+    def test_invalid_citation_reason_passed_to_prompt(self) -> None:
+        fake = _FakeRewriterClient("better query")
+        rewrite_query(
+            "q", reason="invalid_citation", invalid_citations=["BNS 999"], client=fake
+        )
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "invalid_citation" in content
+        assert "BNS 999" in content
+
+    def test_node_sets_sub_queries_and_bumps_iteration(self) -> None:
+        fake = _FakeRewriterClient("rewritten legal query")
+        out = rewriter_node({"query": "orig", "iteration": 0, "grade_pass": False}, client=fake)
+        assert out["sub_queries"] == ["rewritten legal query"]
+        assert out["iteration"] == 1
+
+    def test_node_infers_invalid_citation_reason(self) -> None:
+        # citation_valid False takes priority -> reason should be invalid_citation
+        fake = _FakeRewriterClient("x")
+        out = rewriter_node(
+            {"query": "orig", "iteration": 1, "citation_valid": False}, client=fake
+        )
+        assert out["iteration"] == 2
+        assert any("invalid_citation" in n for n in out["trace_notes"])
+
+
+@pytest.mark.live
+@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+class TestGraderRewriterLive:
+    def test_grader_keeps_relevant_drops_off_topic(self) -> None:
+        # a real murder section is relevant to a murder query; a theft section is not
+        chunks = [_chunk("103"), _chunk("303")]
+        # use the real chunk bodies so the judge has something to reason over
+        chunks[0].chunk.heading = "Punishment for murder"
+        chunks[0].chunk.text = "Whoever commits murder shall be punished with death or life."
+        chunks[1].chunk.heading = "Theft"
+        chunks[1].chunk.text = "Whoever intending to take dishonestly any movable property."
+        kept = grade_chunks("what is the punishment for murder", chunks)
+        ids = [c.chunk.section_id for c in kept]
+        assert "103" in ids  # the murder section must survive
+
+    def test_rewriter_produces_a_query(self) -> None:
+        out = rewrite_query("planning a robbery with friends", reason="low_relevance")
+        assert isinstance(out, str) and len(out) > 0
