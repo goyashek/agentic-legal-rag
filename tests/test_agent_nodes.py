@@ -10,10 +10,31 @@ once that node exists.
 
 from __future__ import annotations
 
+import pytest
+
+from src.agent.llm import has_api_key
 from src.agent.nodes.fast_path import detect_exact_section, lookup_section
 from src.agent.nodes.ood_gate import is_out_of_domain
+from src.agent.nodes.router import RouteDecision, classify, router_node
 from src.ingest.chunk_chonkie import LegalChunk
 from src.retrieval.hybrid import RetrievedChunk
+
+
+class _FakeClient:
+    """Stand-in for the instructor client: `.create(...)` returns a canned model.
+
+    Records the messages it was called with so tests can assert the query made
+    it into the prompt. Zero quota, no key needed.
+    """
+
+    def __init__(self, route: str) -> None:
+        self._route = route
+        self.calls: list[dict] = []
+
+    def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
+        assert response_model is RouteDecision
+        return RouteDecision(route=self._route)
 
 # A tiny IPC->BNS map so the IPC-normalization tests don't need the real PDF.
 IPC_MAP = {"302": "103", "379": "303", "420": "318"}
@@ -94,3 +115,53 @@ class TestOutOfDomainGate:
 
     def test_uses_best_of_several(self) -> None:
         assert is_out_of_domain([_rc(0.1), _rc(0.8), _rc(0.05)]) is False
+
+
+class TestRouterUnit:
+    """Node logic against a fake client — no key, no quota."""
+
+    def test_classify_returns_route(self) -> None:
+        assert classify("punishment for murder", client=_FakeClient("criminal")) == "criminal"
+
+    def test_classify_puts_query_in_prompt(self) -> None:
+        fake = _FakeClient("criminal")
+        classify("someone stole my bike", client=fake)
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "someone stole my bike" in content
+        assert fake.calls[0]["temperature"] == 0
+
+    def test_node_sets_route_and_trace(self) -> None:
+        out = router_node({"query": "punishment for theft"}, client=_FakeClient("criminal"))
+        assert out["route"] == "criminal"
+        assert any("router: criminal" in n for n in out["trace_notes"])
+
+    def test_criminal_route_has_no_canned_answer(self) -> None:
+        # criminal continues down the pipeline; no terminal answer yet
+        out = router_node({"query": "what is culpable homicide"}, client=_FakeClient("criminal"))
+        assert "answer" not in out
+
+    def test_out_of_scope_gets_canned_low_confidence_answer(self) -> None:
+        out = router_node({"query": "how do I file taxes"}, client=_FakeClient("out_of_scope"))
+        assert out["route"] == "out_of_scope"
+        assert out["answer"].confidence == "low"
+        assert out["answer"].in_corpus is False
+
+    def test_needs_clarification_stays_in_corpus(self) -> None:
+        out = router_node({"query": "my friend is in trouble"},
+                          client=_FakeClient("needs_clarification"))
+        assert out["answer"].confidence == "low"
+        assert out["answer"].in_corpus is True
+
+
+@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+class TestRouterLive:
+    """A few live Flash calls to confirm the prompt actually classifies right."""
+
+    def test_clear_criminal(self) -> None:
+        assert classify("what is the punishment for murder under BNS") == "criminal"
+
+    def test_clear_out_of_scope(self) -> None:
+        assert classify("what's a good recipe for butter chicken") == "out_of_scope"
+
+    def test_narrative_is_criminal(self) -> None:
+        assert classify("someone broke into my house and stole my laptop") == "criminal"

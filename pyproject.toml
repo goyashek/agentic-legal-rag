@@ -22,7 +22,7 @@ dependencies = [
     "sentence-transformers>=3.0",    # bge-large-en-v1.5 embeddings + bge-reranker-base
     # --- structured output ---
     "pydantic>=2.9",
-    "instructor>=1.6",
+    "instructor[google-genai]>=1.6",  # google-genai extra pulls jsonref, required for Gemini structured output
     # --- eval ---
     "ragas>=0.2",                    # RAGAS 50-scenario diagnostics
     "datasets>=3.0",                 # load AIBE / BhashaBench slices from HuggingFace
