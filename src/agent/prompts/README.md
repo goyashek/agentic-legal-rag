@@ -12,7 +12,7 @@ Prompt files (✅ = written):
 | ✅ `intent_expander.txt` | intent_expander | Gemini Flash | narrative to 3-5 offence sub-queries |
 | ✅ `grader.txt` | grader | Gemini Flash | per-chunk relevance yes/no |
 | ✅ `rewriter.txt` | rewriter | Gemini Flash | HyDE / targeted rewrite (by reason) |
-| `generator.txt` | generator | Gemini Pro | cited LegalAdvice, cite only from provided chunks |
+| ✅ `generator.txt` | generator | Gemini Pro* | cited LegalAdvice, cite only from provided chunks (*Pro has no free tier — runs on flash-lite via GEMINI_MODEL_PRO until billing) |
 | `checker.txt` | checker | Gemini Flash | claim-vs-source faithfulness judge |
 
 All prompts are loaded via `src/agent/llm.py::load_prompt(name)` (reads `<name>.txt`,

@@ -14,6 +14,7 @@ import pytest
 
 from src.agent.llm import has_api_key
 from src.agent.nodes.fast_path import detect_exact_section, lookup_section
+from src.agent.nodes.generator import generate_answer, generator_node
 from src.agent.nodes.grader import GradeVerdict, grade_chunks, grader_node
 from src.agent.nodes.intent_expander import (
     SubQueries,
@@ -25,6 +26,7 @@ from src.agent.nodes.ood_gate import is_out_of_domain
 from src.agent.nodes.rewriter import RewrittenQuery, rewrite_query, rewriter_node
 from src.agent.nodes.router import RouteDecision, classify, router_node
 from src.ingest.chunk_chonkie import LegalChunk
+from src.models.schemas import Citation, LegalAdvice
 from src.retrieval.hybrid import RetrievedChunk
 
 
@@ -94,6 +96,19 @@ class _FakeRewriterClient:
         self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is RewrittenQuery
         return RewrittenQuery(query=self._rewritten)
+
+
+class _FakeGeneratorClient:
+    """Returns a canned LegalAdvice. Records the rendered prompt. Zero quota."""
+
+    def __init__(self, advice: LegalAdvice) -> None:
+        self._advice = advice
+        self.calls: list[dict] = []
+
+    def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
+        assert response_model is LegalAdvice
+        return self._advice.model_copy(deep=True)
 
 
 # A tiny IPC->BNS map so the IPC-normalization tests don't need the real PDF.
@@ -343,6 +358,53 @@ class TestRewriterUnit:
         assert any("invalid_citation" in n for n in out["trace_notes"])
 
 
+class TestGeneratorUnit:
+    """Cited-advice assembly against a fake client — no key, no quota."""
+
+    def _canned(self) -> LegalAdvice:
+        return LegalAdvice(
+            query="(model may set this)",
+            answer="Murder is punished under BNS 103.",
+            citations=[Citation(act="BNS", section_id="103", heading="Punishment for murder")],
+            offences_identified=["murder"],
+            in_corpus=False,  # generator must overwrite this to True
+        )
+
+    def test_generate_returns_legaladvice(self) -> None:
+        fake = _FakeGeneratorClient(self._canned())
+        out = generate_answer("punishment for murder", [_chunk("103")], client=fake)
+        assert isinstance(out, LegalAdvice)
+        assert out.citations[0].section_id == "103"
+
+    def test_generate_pins_query_and_in_corpus(self) -> None:
+        # the pipeline owns query + in_corpus, not the model
+        fake = _FakeGeneratorClient(self._canned())
+        out = generate_answer("my exact query", [_chunk("103")], client=fake)
+        assert out.query == "my exact query"
+        assert out.in_corpus is True
+
+    def test_context_lists_citable_sections_in_prompt(self) -> None:
+        fake = _FakeGeneratorClient(self._canned())
+        generate_answer("q", [_chunk("103"), _chunk("318")], client=fake)
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "BNS Section 103" in content
+        assert "BNS Section 318" in content
+
+    def test_node_prefers_relevant_chunks_over_retrieved(self) -> None:
+        fake = _FakeGeneratorClient(self._canned())
+        state = {
+            "query": "q",
+            "relevant_chunks": [_chunk("103")],
+            "retrieved": [_chunk("103"), _chunk("999")],
+        }
+        out = generator_node(state, client=fake)
+        # only the graded-relevant chunk should be offered to the model
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "Section 999" not in content
+        assert out["answer"].citations[0].section_id == "103"
+        assert any("generator: 1 citations" in n for n in out["trace_notes"])
+
+
 @pytest.mark.live
 @pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
 class TestGraderRewriterLive:
@@ -361,3 +423,14 @@ class TestGraderRewriterLive:
     def test_rewriter_produces_a_query(self) -> None:
         out = rewrite_query("planning a robbery with friends", reason="low_relevance")
         assert isinstance(out, str) and len(out) > 0
+
+    def test_generator_cites_only_provided_sections(self) -> None:
+        # hand it a real murder section; the answer must cite BNS 103 and nothing
+        # outside the provided set (the prompt's core constraint).
+        c = _chunk("103")
+        c.chunk.heading = "Punishment for murder"
+        c.chunk.text = "Whoever commits murder shall be punished with death or life imprisonment."
+        advice = generate_answer("what is the punishment for murder", [c])
+        assert advice.citations, "generator should cite at least one section"
+        assert all(cit.section_id == "103" for cit in advice.citations)
+        assert advice.in_corpus is True

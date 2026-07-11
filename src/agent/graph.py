@@ -27,11 +27,12 @@ grader / citation_validator / checker. All three route back through the rewriter
 which bumps `iteration`. Once it goes past the budget the graph ends with
 confidence="low" instead of spinning forever.
 
-Build status: Mon wired fast_path → router. Tue splices in the criminal branch:
-router(criminal) → intent_expander → retrieve → ood_gate → (ood → not_in_corpus →
-END | in-corpus → END for now; grader lands Wed). Routing decisions are pure
-functions, unit-testable without a key or the index; retrieve_node takes an
-injectable retriever/reranker so its fan/dedupe logic tests with fakes.
+Build status: Mon fast_path → router. Tue criminal branch: intent_expander →
+retrieve → ood_gate. Wed the self-correction loop: grader → {generator | rewriter
+→ retrieve | low_confidence}. Thu the generator (grade_pass → generator → END for
+now; citation_validator + checker land Fri and splice between generator and END).
+Routing decisions are pure functions, unit-testable without a key or the index;
+node LLM clients are injectable so logic tests run with fakes at zero quota.
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ def route_after_grader(state: AgentState) -> str:
     the generator lands Thu.
     """
     if state.get("grade_pass"):
-        return END  # TODO(Thu): -> "generator"
+        return "generator"
     if state.get("iteration", 0) < RETRIEVAL_LOOP_BUDGET:
         return "rewriter"
     return "low_confidence"
@@ -222,6 +223,7 @@ def build_graph():
     above already name the intended targets.
     """
     from src.agent.nodes.fast_path import fast_path_node
+    from src.agent.nodes.generator import generator_node
     from src.agent.nodes.grader import grader_node
     from src.agent.nodes.intent_expander import intent_expander_node
     from src.agent.nodes.ood_gate import ood_gate_node
@@ -236,6 +238,7 @@ def build_graph():
     builder.add_node("ood_gate", ood_gate_node)
     builder.add_node("grader", grader_node)
     builder.add_node("rewriter", rewriter_node)
+    builder.add_node("generator", generator_node)
     builder.add_node("not_in_corpus", not_in_corpus_node)
     builder.add_node("low_confidence", low_confidence_node)
 
@@ -246,9 +249,10 @@ def build_graph():
     builder.add_edge("retrieve", "ood_gate")
     builder.add_conditional_edges("ood_gate", route_after_ood_gate, ["not_in_corpus", "grader"])
     builder.add_conditional_edges(
-        "grader", route_after_grader, ["rewriter", "low_confidence", END]
+        "grader", route_after_grader, ["generator", "rewriter", "low_confidence"]
     )
     builder.add_edge("rewriter", "retrieve")  # loop back: re-retrieve on the rewritten query
+    builder.add_edge("generator", END)  # TODO(Fri): -> "citation_validator"
     builder.add_edge("not_in_corpus", END)
     builder.add_edge("low_confidence", END)
 

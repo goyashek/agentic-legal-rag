@@ -12,6 +12,7 @@ Layers:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -91,9 +92,8 @@ class TestRoutingFunctions:
     def test_in_corpus_goes_to_grader(self) -> None:
         assert route_after_ood_gate({"ood": False}) == "grader"
 
-    def test_grade_pass_goes_to_end(self) -> None:
-        # pass path ends at END for now; generator lands Thu
-        assert route_after_grader({"grade_pass": True}) == END
+    def test_grade_pass_goes_to_generator(self) -> None:
+        assert route_after_grader({"grade_pass": True}) == "generator"
 
     def test_grade_fail_within_budget_rewrites(self) -> None:
         assert route_after_grader({"grade_pass": False, "iteration": 0}) == "rewriter"
@@ -211,3 +211,23 @@ class TestCriminalBranchEndToEnd:
         assert state["ood"] is False
         # retrieval should surface a BNS section for the reranked set
         assert any(c.chunk.act == "BNS" for c in state["retrieved"])
+
+    def test_full_pipeline_produces_cited_answer(self) -> None:
+        # the Thursday deliverable: query in -> generated, cited LegalAdvice out
+        state = answer_query("what is the punishment for cheating")
+        answer = state["answer"]
+        assert answer is not None
+        assert answer.query == "what is the punishment for cheating"
+        assert answer.in_corpus is True
+        assert answer.citations, "a graded-pass answer must carry citations"
+        # Every cited section must be one that was actually retrieved. The corpus is
+        # keyed at SECTION level but the generator legitimately cites subsections
+        # ("318(2)"), so normalize to section level before the membership check —
+        # exactly what Fri's deterministic citation validator will formalize (and
+        # what fast_path already does on the query side).
+        def _section(sid: str) -> str:
+            return re.match(r"\d+[A-Z]?", sid).group(0) if re.match(r"\d+[A-Z]?", sid) else sid
+
+        retrieved_ids = {(c.chunk.act, _section(c.chunk.section_id)) for c in state["retrieved"]}
+        for cit in answer.citations:
+            assert (cit.act, _section(cit.section_id)) in retrieved_ids
