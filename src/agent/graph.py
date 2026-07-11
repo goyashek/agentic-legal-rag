@@ -27,12 +27,13 @@ grader / citation_validator / checker. All three route back through the rewriter
 which bumps `iteration`. Once it goes past the budget the graph ends with
 confidence="low" instead of spinning forever.
 
-Build status: Mon fast_path → router. Tue criminal branch: intent_expander →
-retrieve → ood_gate. Wed the self-correction loop: grader → {generator | rewriter
-→ retrieve | low_confidence}. Thu the generator (grade_pass → generator → END for
-now; citation_validator + checker land Fri and splice between generator and END).
-Routing decisions are pure functions, unit-testable without a key or the index;
-node LLM clients are injectable so logic tests run with fakes at zero quota.
+Build status: COMPLETE (Week 2 close). The full flow above is wired end to end —
+fast_path → router → intent_expander → retrieve → ood_gate → grader → generator →
+citation_validator → checker → END, with the grader / validator / checker all
+looping back through the rewriter (→ retrieve) within RETRIEVAL_LOOP_BUDGET, then
+falling to low_confidence when the budget is spent. Routing decisions are pure
+functions, unit-testable without a key or the index; node LLM clients are
+injectable so logic tests run with fakes at zero quota.
 """
 
 from __future__ import annotations
@@ -81,11 +82,33 @@ def route_after_grader(state: AgentState) -> str:
 
     iteration counts rewrites done so far (rewriter bumps it). While it's below the
     budget we loop back through the rewriter; once it's spent we stop with a
-    low-confidence answer rather than spinning. The pass path ends at END for now —
-    the generator lands Thu.
+    low-confidence answer rather than spinning.
     """
     if state.get("grade_pass"):
         return "generator"
+    if state.get("iteration", 0) < RETRIEVAL_LOOP_BUDGET:
+        return "rewriter"
+    return "low_confidence"
+
+
+def route_after_citation_validator(state: AgentState) -> str:
+    """valid citations -> faithfulness check; fabricated -> rewrite (within budget).
+
+    A fabricated citation is the failure this whole project is built to catch, so
+    on invalid we loop back through the rewriter (which sees citation_valid=False
+    and rewrites in 'invalid_citation' mode). Budget spent -> low_confidence.
+    """
+    if state.get("citation_valid"):
+        return "checker"
+    if state.get("iteration", 0) < RETRIEVAL_LOOP_BUDGET:
+        return "rewriter"
+    return "low_confidence"
+
+
+def route_after_checker(state: AgentState) -> str:
+    """faithful -> done; unfaithful -> rewrite + regenerate (within budget)."""
+    if state.get("faithful"):
+        return END
     if state.get("iteration", 0) < RETRIEVAL_LOOP_BUDGET:
         return "rewriter"
     return "low_confidence"
@@ -222,6 +245,8 @@ def build_graph():
     adds an `add_node` + re-points a conditional edge; the routing functions
     above already name the intended targets.
     """
+    from src.agent.nodes.checker import checker_node
+    from src.agent.nodes.citation_validator import citation_validator_node
     from src.agent.nodes.fast_path import fast_path_node
     from src.agent.nodes.generator import generator_node
     from src.agent.nodes.grader import grader_node
@@ -239,6 +264,8 @@ def build_graph():
     builder.add_node("grader", grader_node)
     builder.add_node("rewriter", rewriter_node)
     builder.add_node("generator", generator_node)
+    builder.add_node("citation_validator", citation_validator_node)
+    builder.add_node("checker", checker_node)
     builder.add_node("not_in_corpus", not_in_corpus_node)
     builder.add_node("low_confidence", low_confidence_node)
 
@@ -252,7 +279,15 @@ def build_graph():
         "grader", route_after_grader, ["generator", "rewriter", "low_confidence"]
     )
     builder.add_edge("rewriter", "retrieve")  # loop back: re-retrieve on the rewritten query
-    builder.add_edge("generator", END)  # TODO(Fri): -> "citation_validator"
+    builder.add_edge("generator", "citation_validator")
+    builder.add_conditional_edges(
+        "citation_validator",
+        route_after_citation_validator,
+        ["checker", "rewriter", "low_confidence"],
+    )
+    builder.add_conditional_edges(
+        "checker", route_after_checker, ["rewriter", "low_confidence", END]
+    )
     builder.add_edge("not_in_corpus", END)
     builder.add_edge("low_confidence", END)
 

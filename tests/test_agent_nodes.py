@@ -13,6 +13,13 @@ from __future__ import annotations
 import pytest
 
 from src.agent.llm import has_api_key
+from src.agent.nodes.checker import FaithfulnessVerdict, check_faithfulness, checker_node
+from src.agent.nodes.citation_validator import (
+    citation_validator_node,
+    extract_cited_sections,
+    normalize_section,
+    validate_citations,
+)
 from src.agent.nodes.fast_path import detect_exact_section, lookup_section
 from src.agent.nodes.generator import generate_answer, generator_node
 from src.agent.nodes.grader import GradeVerdict, grade_chunks, grader_node
@@ -109,6 +116,20 @@ class _FakeGeneratorClient:
         self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is LegalAdvice
         return self._advice.model_copy(deep=True)
+
+
+class _FakeCheckerClient:
+    """Returns a canned faithfulness verdict. Records the rendered prompt. Zero quota."""
+
+    def __init__(self, faithful: bool, unsupported: list[str] | None = None) -> None:
+        self._faithful = faithful
+        self._unsupported = unsupported or []
+        self.calls: list[dict] = []
+
+    def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
+        assert response_model is FaithfulnessVerdict
+        return FaithfulnessVerdict(faithful=self._faithful, unsupported_claims=self._unsupported)
 
 
 # A tiny IPC->BNS map so the IPC-normalization tests don't need the real PDF.
@@ -403,6 +424,106 @@ class TestGeneratorUnit:
         assert "Section 999" not in content
         assert out["answer"].citations[0].section_id == "103"
         assert any("generator: 1 citations" in n for n in out["trace_notes"])
+
+
+def _advice(citations: list[tuple[str, str]], answer: str = "some legal answer") -> LegalAdvice:
+    """A LegalAdvice citing the given (act, section_id) pairs."""
+    return LegalAdvice(
+        query="q",
+        answer=answer,
+        citations=[Citation(act=a, section_id=s) for a, s in citations],
+    )
+
+
+class TestCitationValidator:
+    """The headline piece: pure-code check that every cited section was retrieved."""
+
+    def test_normalize_drops_subsection(self) -> None:
+        assert normalize_section("318(2)") == "318"
+        assert normalize_section("103") == "103"
+        assert normalize_section("111A") == "111A"
+        assert normalize_section("63A(1)") == "63A"
+
+    def test_extract_reads_structured_citations(self) -> None:
+        adv = _advice([("bns", "103"), ("BNSS", "173")])
+        assert extract_cited_sections(adv) == [("BNS", "103"), ("BNSS", "173")]
+
+    def test_all_cited_present_is_valid(self) -> None:
+        adv = _advice([("BNS", "103"), ("BNS", "318")])
+        retrieved = [_chunk("103"), _chunk("318"), _chunk("62")]
+        valid, invalid = validate_citations(adv, retrieved)
+        assert valid is True
+        assert invalid == []
+
+    def test_fabricated_citation_is_rejected(self) -> None:
+        # THE demo: answer cites BNS 307 but only 306 was retrieved -> caught.
+        adv = _advice([("BNS", "306"), ("BNS", "307")])
+        retrieved = [_chunk("306")]
+        valid, invalid = validate_citations(adv, retrieved)
+        assert valid is False
+        assert invalid == ["BNS 307"]
+
+    def test_subsection_citation_valid_against_section(self) -> None:
+        # generator cites 318(2); corpus is section-keyed 318 -> still valid
+        adv = _advice([("BNS", "318(2)")])
+        retrieved = [_chunk("318")]
+        valid, invalid = validate_citations(adv, retrieved)
+        assert valid is True
+        assert invalid == []
+
+    def test_wrong_act_is_rejected(self) -> None:
+        # section 103 was retrieved for BNS, but the answer cites BNSS 103
+        adv = _advice([("BNSS", "103")])
+        retrieved = [_chunk("103")]  # _chunk builds BNS chunks
+        valid, invalid = validate_citations(adv, retrieved)
+        assert valid is False
+        assert invalid == ["BNSS 103"]
+
+    def test_node_sets_flags_and_trace(self) -> None:
+        adv = _advice([("BNS", "999")])
+        out = citation_validator_node({"answer": adv, "retrieved": [_chunk("103")]})
+        assert out["citation_valid"] is False
+        assert out["invalid_citations"] == ["BNS 999"]
+        assert any("citation_validator: invalid" in n for n in out["trace_notes"])
+
+    def test_node_no_citations_is_invalid(self) -> None:
+        # an answer that cites nothing isn't a valid substantive answer
+        adv = _advice([])
+        out = citation_validator_node({"answer": adv, "retrieved": [_chunk("103")]})
+        assert out["citation_valid"] is False
+
+
+class TestCheckerUnit:
+    """Faithfulness pass against a fake client — no key, no quota."""
+
+    def test_faithful_verdict(self) -> None:
+        adv = _advice([("BNS", "103")], answer="Murder is punished under BNS 103.")
+        fake = _FakeCheckerClient(faithful=True)
+        faithful, unsupported = check_faithfulness(adv, [_chunk("103")], client=fake)
+        assert faithful is True
+        assert unsupported == []
+
+    def test_unfaithful_verdict_lists_claims(self) -> None:
+        adv = _advice([("BNS", "103")], answer="Murder carries a mandatory death sentence.")
+        fake = _FakeCheckerClient(faithful=False, unsupported=["mandatory death sentence"])
+        faithful, unsupported = check_faithfulness(adv, [_chunk("103")], client=fake)
+        assert faithful is False
+        assert "mandatory death sentence" in unsupported
+
+    def test_context_uses_only_cited_sections(self) -> None:
+        adv = _advice([("BNS", "103")])
+        fake = _FakeCheckerClient(faithful=True)
+        check_faithfulness(adv, [_chunk("103"), _chunk("999")], client=fake)
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "Section 103" in content
+        assert "Section 999" not in content  # only the cited section's text goes in
+
+    def test_node_sets_faithful(self) -> None:
+        adv = _advice([("BNS", "103")])
+        fake = _FakeCheckerClient(faithful=True)
+        out = checker_node({"answer": adv, "retrieved": [_chunk("103")]}, client=fake)
+        assert out["faithful"] is True
+        assert any("checker: faithful" in n for n in out["trace_notes"])
 
 
 @pytest.mark.live

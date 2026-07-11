@@ -12,7 +12,6 @@ Layers:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -24,12 +23,15 @@ from src.agent.graph import (
     answer_query,
     build_graph,
     retrieve_node,
+    route_after_checker,
+    route_after_citation_validator,
     route_after_fast_path,
     route_after_grader,
     route_after_ood_gate,
     route_after_router,
 )
 from src.agent.llm import has_api_key
+from src.agent.nodes.citation_validator import validate_citations
 from src.ingest.chunk_chonkie import LegalChunk
 from src.retrieval.hybrid import RetrievedChunk
 
@@ -105,6 +107,34 @@ class TestRoutingFunctions:
     def test_grade_fail_budget_spent_goes_low_confidence(self) -> None:
         assert (
             route_after_grader({"grade_pass": False, "iteration": RETRIEVAL_LOOP_BUDGET})
+            == "low_confidence"
+        )
+
+    def test_valid_citations_go_to_checker(self) -> None:
+        assert route_after_citation_validator({"citation_valid": True}) == "checker"
+
+    def test_invalid_citations_rewrite_within_budget(self) -> None:
+        assert (
+            route_after_citation_validator({"citation_valid": False, "iteration": 0}) == "rewriter"
+        )
+
+    def test_invalid_citations_budget_spent_low_confidence(self) -> None:
+        assert (
+            route_after_citation_validator(
+                {"citation_valid": False, "iteration": RETRIEVAL_LOOP_BUDGET}
+            )
+            == "low_confidence"
+        )
+
+    def test_faithful_goes_to_end(self) -> None:
+        assert route_after_checker({"faithful": True}) == END
+
+    def test_unfaithful_rewrites_within_budget(self) -> None:
+        assert route_after_checker({"faithful": False, "iteration": 0}) == "rewriter"
+
+    def test_unfaithful_budget_spent_low_confidence(self) -> None:
+        assert (
+            route_after_checker({"faithful": False, "iteration": RETRIEVAL_LOOP_BUDGET})
             == "low_confidence"
         )
 
@@ -212,22 +242,29 @@ class TestCriminalBranchEndToEnd:
         # retrieval should surface a BNS section for the reranked set
         assert any(c.chunk.act == "BNS" for c in state["retrieved"])
 
-    def test_full_pipeline_produces_cited_answer(self) -> None:
-        # the Thursday deliverable: query in -> generated, cited LegalAdvice out
+    def test_full_pipeline_honours_the_truthful_contract(self) -> None:
+        # The Week-2 deliverable: query in -> a full run through generator ->
+        # citation_validator -> checker. The self-correcting system has TWO valid
+        # outcomes, and the point is that both are honest:
+        #   (a) a cited answer whose every citation was actually retrieved, or
+        #   (b) a low-confidence decline (loop budget spent) with no citations.
+        # What must NEVER happen: a confident answer with absent/unverified
+        # citations. That's the invariant this asserts.
         state = answer_query("what is the punishment for cheating")
         answer = state["answer"]
         assert answer is not None
         assert answer.query == "what is the punishment for cheating"
         assert answer.in_corpus is True
-        assert answer.citations, "a graded-pass answer must carry citations"
-        # Every cited section must be one that was actually retrieved. The corpus is
-        # keyed at SECTION level but the generator legitimately cites subsections
-        # ("318(2)"), so normalize to section level before the membership check —
-        # exactly what Fri's deterministic citation validator will formalize (and
-        # what fast_path already does on the query side).
-        def _section(sid: str) -> str:
-            return re.match(r"\d+[A-Z]?", sid).group(0) if re.match(r"\d+[A-Z]?", sid) else sid
 
-        retrieved_ids = {(c.chunk.act, _section(c.chunk.section_id)) for c in state["retrieved"]}
-        for cit in answer.citations:
-            assert (cit.act, _section(cit.section_id)) in retrieved_ids
+        if not answer.citations:
+            # A citation-free answer is only reachable via low_confidence (the
+            # validator marks a citation-less answer invalid, so it can't hit END).
+            assert answer.confidence == "low"
+        else:
+            # Any answer that KEPT its citations reached END through the citation
+            # validator, so its citations are — by the validator's own definition —
+            # all present in the retrieved set. Assert that with the validator
+            # itself rather than re-deriving the (act-normalizing) membership rule,
+            # so the test can't drift from the code it's checking.
+            valid, invalid = validate_citations(answer, state["retrieved"])
+            assert valid, f"final answer carries unverified citations: {invalid}"
