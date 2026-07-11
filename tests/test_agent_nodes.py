@@ -14,6 +14,12 @@ import pytest
 
 from src.agent.llm import has_api_key
 from src.agent.nodes.fast_path import detect_exact_section, lookup_section
+from src.agent.nodes.intent_expander import (
+    SubQueries,
+    _dedupe,
+    expand_intent,
+    intent_expander_node,
+)
 from src.agent.nodes.ood_gate import is_out_of_domain
 from src.agent.nodes.router import RouteDecision, classify, router_node
 from src.ingest.chunk_chonkie import LegalChunk
@@ -35,6 +41,20 @@ class _FakeClient:
         self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is RouteDecision
         return RouteDecision(route=self._route)
+
+
+class _FakeExpanderClient:
+    """Returns canned sub-queries for the intent expander. Zero quota."""
+
+    def __init__(self, subs: list[str]) -> None:
+        self._subs = subs
+        self.calls: list[dict] = []
+
+    def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
+        self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
+        assert response_model is SubQueries
+        return SubQueries(sub_queries=self._subs)
+
 
 # A tiny IPC->BNS map so the IPC-normalization tests don't need the real PDF.
 IPC_MAP = {"302": "103", "379": "303", "420": "318"}
@@ -165,3 +185,43 @@ class TestRouterLive:
 
     def test_narrative_is_criminal(self) -> None:
         assert classify("someone broke into my house and stole my laptop") == "criminal"
+
+
+class TestIntentExpanderUnit:
+    """Fan/dedupe/fallback logic against a fake client — no key, no quota."""
+
+    def test_dedupe_drops_case_dupes_and_blanks(self) -> None:
+        assert _dedupe(["theft", "Theft ", "", "  ", "robbery"]) == ["theft", "robbery"]
+
+    def test_expand_returns_subqueries(self) -> None:
+        fake = _FakeExpanderClient(["house trespass", "theft of movable property"])
+        subs = expand_intent("someone broke into my house and stole my phone", client=fake)
+        assert subs == ["house trespass", "theft of movable property"]
+
+    def test_expand_caps_at_max(self) -> None:
+        fake = _FakeExpanderClient([f"q{i}" for i in range(9)])
+        subs = expand_intent("multi-offence narrative", max_sub_queries=5, client=fake)
+        assert len(subs) == 5
+
+    def test_expand_falls_back_to_query_when_empty(self) -> None:
+        fake = _FakeExpanderClient(["", "   "])
+        subs = expand_intent("punishment for murder", client=fake)
+        assert subs == ["punishment for murder"]
+
+    def test_node_sets_sub_queries_and_trace(self) -> None:
+        fake = _FakeExpanderClient(["theft", "criminal trespass"])
+        out = intent_expander_node({"query": "broke in and stole"}, client=fake)
+        assert out["sub_queries"] == ["theft", "criminal trespass"]
+        assert any("intent_expander: 2 sub-queries" in n for n in out["trace_notes"])
+
+
+@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+class TestIntentExpanderLive:
+    def test_multi_offence_narrative_expands(self) -> None:
+        subs = expand_intent("someone broke into my house at night and stole my laptop")
+        # should surface at least two distinct issues (trespass + theft)
+        assert len(subs) >= 2
+
+    def test_simple_query_stays_focused(self) -> None:
+        subs = expand_intent("what is the punishment for murder")
+        assert 1 <= len(subs) <= 3

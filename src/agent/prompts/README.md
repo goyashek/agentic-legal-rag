@@ -9,7 +9,7 @@ Prompt files (✅ = written):
 | File | Node | Model | Job |
 |---|---|---|---|
 | ✅ `router.txt` | router | Gemini Flash | 3-way classify: criminal / out_of_scope / needs_clarification |
-| `intent_expander.txt` | intent_expander | Gemini Flash | narrative to 3-5 offence sub-queries |
+| ✅ `intent_expander.txt` | intent_expander | Gemini Flash | narrative to 3-5 offence sub-queries |
 | `grader.txt` | grader | Gemini Flash | per-chunk relevance yes/no |
 | `rewriter.txt` | rewriter | Gemini Flash | HyDE / targeted rewrite (by reason) |
 | `generator.txt` | generator | Gemini Pro | cited LegalAdvice, cite only from provided chunks |

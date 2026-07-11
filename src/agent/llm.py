@@ -27,7 +27,11 @@ from typing import Literal
 Tier = Literal["flash", "pro"]
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
-_DEFAULT_MODELS: dict[Tier, str] = {"flash": "gemini-2.5-flash", "pro": "gemini-2.5-pro"}
+# flash-lite by default: 500 req/day on the free tier vs 20 on 2.5-flash (the
+# grader fans out ~8 calls/query, so the daily cap matters). Override per-env with
+# GEMINI_MODEL_FLASH / GEMINI_MODEL_PRO. NB: Gemini Pro has no free tier — the pro
+# default only works with billing (or point GEMINI_MODEL_PRO at a flash tier).
+_DEFAULT_MODELS: dict[Tier, str] = {"flash": "gemini-3.1-flash-lite", "pro": "gemini-2.5-pro"}
 
 # Sync clients are safe to reuse process-wide, so cache them. Async clients are
 # NOT cached: instructor's google-genai async client must live in the caller's

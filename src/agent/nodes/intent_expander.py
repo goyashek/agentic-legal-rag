@@ -7,22 +7,66 @@ per offence. The retriever runs per sub-query and results get deduped.
 
 This is my fix for the cross-sectional reasoning problem, and the part that took me the
 longest to get right. Runs after the router classifies the query as `criminal`.
+
+Client is injected (defaults to the shared Flash client) so node logic is
+unit-testable with a fake client at zero quota; live-Gemini tests gate on the key.
 """
 
 from __future__ import annotations
 
+from pydantic import BaseModel, Field
+
+from src.agent.llm import get_client, load_prompt
 from src.agent.state import AgentState
 
 
-def expand_intent(query: str, *, max_sub_queries: int = 5) -> list[str]:
+class SubQueries(BaseModel):
+    """Structured expander output. `instructor` forces the model to fill this."""
+
+    sub_queries: list[str] = Field(
+        description="1-5 focused, retrieval-friendly sub-queries, one per distinct "
+        "legal issue in the user's query",
+    )
+
+
+def _dedupe(queries: list[str]) -> list[str]:
+    """Drop blanks and case-insensitive duplicates, preserving order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for q in queries:
+        q = q.strip()
+        key = q.lower()
+        if q and key not in seen:
+            seen.add(key)
+            out.append(q)
+    return out
+
+
+def expand_intent(
+    query: str, *, max_sub_queries: int = 5, client: object | None = None
+) -> list[str]:
     """Decompose a narrative into distinct offence-focused sub-queries.
 
     Returns 1-5 sub-queries. A simple single-offence query just returns [query]
-    unchanged, since over-expanding only adds noise and cost.
+    unchanged, since over-expanding only adds noise and cost. Falls back to the
+    original query if the model returns nothing usable.
     """
-    raise NotImplementedError("week 2 tue: Gemini Flash offence extraction")
+    client = client or get_client("flash")
+    prompt = load_prompt("intent_expander").format(query=query, max_sub_queries=max_sub_queries)
+    result: SubQueries = client.create(  # type: ignore[attr-defined]
+        messages=[{"role": "user", "content": prompt}],
+        response_model=SubQueries,
+        temperature=0,
+    )
+    subs = _dedupe(result.sub_queries)[:max_sub_queries]
+    return subs or [query]
 
 
-def intent_expander_node(state: AgentState) -> AgentState:
+def intent_expander_node(state: AgentState, *, client: object | None = None) -> AgentState:
     """LangGraph node. Sets sub_queries. Downstream retrieval fans out over these."""
-    raise NotImplementedError("week 2 tue: wrap expand_intent into a node")
+    subs = expand_intent(state["query"], client=client)
+    notes = state.get("trace_notes", [])
+    return {
+        "sub_queries": subs,
+        "trace_notes": [*notes, f"intent_expander: {len(subs)} sub-queries"],
+    }

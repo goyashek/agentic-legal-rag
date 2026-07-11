@@ -1,11 +1,13 @@
 """Tests for the graph wiring.
 
-Three layers:
+Layers:
   - routing functions: pure, branch on state, no key/index (the bulk here).
+  - retrieve_node fan/dedupe: fake retriever + reranker, no models, no key.
   - fast-path e2e: keyless — a "BNS 103" query hits the deterministic fast path
     and ends without any LLM call, exercising the real StateGraph. Needs the
     built index (data/processed/sections.jsonl), so it skips when that's absent.
-  - router e2e: a live Gemini call for a narrative miss; gated on the key.
+  - criminal-branch e2e: live Gemini (router + expander) + real retrieval; gated
+    on both the key and the index.
 """
 
 from __future__ import annotations
@@ -15,11 +17,53 @@ from pathlib import Path
 import pytest
 from langgraph.graph import END
 
-from src.agent.graph import answer_query, build_graph, route_after_fast_path, route_after_router
+from src.agent.graph import (
+    _dedupe_by_chunk_id,
+    answer_query,
+    build_graph,
+    retrieve_node,
+    route_after_fast_path,
+    route_after_ood_gate,
+    route_after_router,
+)
 from src.agent.llm import has_api_key
+from src.ingest.chunk_chonkie import LegalChunk
+from src.retrieval.hybrid import RetrievedChunk
 
 _INDEX = Path("data/processed/sections.jsonl")
+_QDRANT = Path("data/processed/qdrant")
 _have_index = _INDEX.exists()
+_have_full_index = _INDEX.exists() and _QDRANT.exists() and Path("data/processed/bm25.pkl").exists()
+
+
+def _rc(chunk_id: str, rrf: float) -> RetrievedChunk:
+    section = chunk_id.split("::")[1]
+    return RetrievedChunk(
+        chunk=LegalChunk(chunk_id, "BNS", section, "heading", "text"), rrf_score=rrf
+    )
+
+
+class _FakeRetriever:
+    """Returns a canned hit list keyed by query; records calls."""
+
+    def __init__(self, per_query: dict[str, list[RetrievedChunk]]) -> None:
+        self._per_query = per_query
+        self.calls: list[str] = []
+
+    def retrieve(self, query: str, *, top_k: int = 20) -> list[RetrievedChunk]:
+        self.calls.append(query)
+        return self._per_query.get(query, [])
+
+
+class _PassThroughReranker:
+    """Reranker stand-in: returns the first top_k unchanged; records the query."""
+
+    def __init__(self) -> None:
+        self.query: str | None = None
+
+    def rerank(self, query, candidates, *, top_k=8):  # noqa: ANN001
+        self.query = query
+        return candidates[:top_k]
 
 
 class TestRoutingFunctions:
@@ -32,14 +76,54 @@ class TestRoutingFunctions:
     def test_fast_path_absent_key_defaults_to_router(self) -> None:
         assert route_after_fast_path({}) == "router"
 
-    def test_criminal_route_continues(self) -> None:
-        # criminal currently ends here too (pipeline extends Tue); assert it's
-        # NOT treated as a terminal canned-answer route by mistake.
-        assert route_after_router({"route": "criminal"}) == END
+    def test_criminal_route_goes_to_intent_expander(self) -> None:
+        assert route_after_router({"route": "criminal"}) == "intent_expander"
 
     def test_terminal_routes_end(self) -> None:
         assert route_after_router({"route": "out_of_scope"}) == END
         assert route_after_router({"route": "needs_clarification"}) == END
+
+    def test_ood_routes_to_not_in_corpus(self) -> None:
+        assert route_after_ood_gate({"ood": True}) == "not_in_corpus"
+
+    def test_in_corpus_continues(self) -> None:
+        assert route_after_ood_gate({"ood": False}) == END
+
+
+class TestRetrieveNode:
+    """Fan over sub-queries + dedupe, using fakes (no models, no key)."""
+
+    def test_dedupe_keeps_best_rrf(self) -> None:
+        dupes = [_rc("BNS::103::0", 0.2), _rc("BNS::103::0", 0.9), _rc("BNS::63::0", 0.5)]
+        out = {c.chunk.chunk_id: c.rrf_score for c in _dedupe_by_chunk_id(dupes)}
+        assert out == {"BNS::103::0": 0.9, "BNS::63::0": 0.5}
+
+    def test_fans_over_sub_queries_and_dedupes(self) -> None:
+        retr = _FakeRetriever(
+            {
+                "house trespass": [_rc("BNS::329::0", 0.5), _rc("BNS::303::0", 0.3)],
+                "theft": [_rc("BNS::303::0", 0.8)],  # 303 overlaps -> dedupe to best rrf
+            }
+        )
+        rer = _PassThroughReranker()
+        out = retrieve_node(
+            {"query": "broke in and stole", "sub_queries": ["house trespass", "theft"]},
+            retriever=retr,
+            reranker=rer,
+        )
+        ids = {c.chunk.chunk_id for c in out["retrieved"]}
+        assert ids == {"BNS::329::0", "BNS::303::0"}
+        assert retr.calls == ["house trespass", "theft"]
+        # reranks against the ORIGINAL query, not a sub-query
+        assert rer.query == "broke in and stole"
+
+    def test_falls_back_to_query_when_no_sub_queries(self) -> None:
+        retr = _FakeRetriever({"punishment for murder": [_rc("BNS::103::0", 0.9)]})
+        out = retrieve_node(
+            {"query": "punishment for murder"}, retriever=retr, reranker=_PassThroughReranker()
+        )
+        assert retr.calls == ["punishment for murder"]
+        assert out["retrieved"][0].chunk.section_id == "103"
 
 
 class TestGraphCompiles:
@@ -76,7 +160,33 @@ class TestRouterEndToEnd:
         assert state["route"] == "out_of_scope"
         assert state["answer"].in_corpus is False
 
-    def test_narrative_crime_routes_criminal(self) -> None:
+
+@pytest.mark.skipif(
+    not (_have_full_index and has_api_key()),
+    reason="needs both the built Qdrant index and GEMINI_API_KEY",
+)
+class TestCriminalBranchEndToEnd:
+    """Full criminal path: router -> intent_expander -> retrieve -> ood_gate."""
+
+    @pytest.fixture(autouse=True, scope="class")
+    @staticmethod
+    def _release_qdrant_lock():
+        # answer_query caches a HybridRetriever holding the embedded-Qdrant file
+        # lock; release it on teardown so test_retrieval can open its own client.
+        yield
+        from src.agent.graph import reset_retrieval_stack
+
+        reset_retrieval_stack()
+
+    def test_narrative_crime_retrieves_in_corpus(self) -> None:
         state = answer_query("someone broke into my house and stole my laptop")
-        assert state["fast_path_hit"] is False
         assert state["route"] == "criminal"
+        assert len(state["sub_queries"]) >= 1
+        assert len(state["retrieved"]) > 0
+        assert state["ood"] is False  # a real crime narrative is in-corpus
+
+    def test_in_corpus_query_is_not_flagged_ood(self) -> None:
+        state = answer_query("what is the punishment for cheating")
+        assert state["ood"] is False
+        # retrieval should surface a BNS section for the reranked set
+        assert any(c.chunk.act == "BNS" for c in state["retrieved"])
