@@ -8,3 +8,43 @@
 {"id": "s08", "query": "an accountant I trusted with company funds secretly kept the money for himself", "relevant_sections": ["BNS::316"], "difficulty": "medium", "note": "criminal breach of trust"}
 {"id": "s09", "query": "a group planned together in secret to rob a bank next week", "relevant_sections": ["BNS::61"], "difficulty": "hard", "note": "criminal conspiracy (planning, offence not yet done)"}
 {"id": "s10", "query": "a newspaper printed false claims that ruined my reputation", "relevant_sections": ["BNS::356"], "difficulty": "medium", "note": "defamation"}
+{"id": "s11", "query": "someone threw acid on a woman's face during an argument", "relevant_sections": ["BNS::124"], "difficulty": "easy", "note": "acid attack"}
+{"id": "s12", "query": "kidnappers took a child and demanded money for his release", "relevant_sections": ["BNS::140"], "difficulty": "easy", "note": "kidnap for ransom"}
+{"id": "s13", "query": "a driver speeding recklessly ran over a pedestrian on the road", "relevant_sections": ["BNS::106", "BNS::281"], "difficulty": "medium", "note": "death by negligence + rash driving"}
+{"id": "s14", "query": "a man broke into my house at night through a window and stole things", "relevant_sections": ["BNS::330", "BNS::331"], "difficulty": "easy", "note": "house-breaking"}
+{"id": "s15", "query": "someone forged my signature on a property sale document", "relevant_sections": ["BNS::336", "BNS::338"], "difficulty": "medium", "note": "forgery of valuable security"}
+{"id": "s16", "query": "a gang was printing fake currency notes in a basement", "relevant_sections": ["BNS::178"], "difficulty": "easy", "note": "counterfeiting currency"}
+{"id": "s17", "query": "a young bride died of burns within a year of marriage over dowry demands", "relevant_sections": ["BNS::80"], "difficulty": "easy", "note": "dowry death"}
+{"id": "s18", "query": "a man keeps following me everywhere and watching my house", "relevant_sections": ["BNS::78"], "difficulty": "easy", "note": "stalking"}
+{"id": "s19", "query": "my manager repeatedly makes unwanted sexual advances at work", "relevant_sections": ["BNS::75"], "difficulty": "easy", "note": "sexual harassment"}
+{"id": "s20", "query": "someone secretly filmed a woman while she was bathing", "relevant_sections": ["BNS::77"], "difficulty": "easy", "note": "voyeurism"}
+{"id": "s21", "query": "a man threatened to leak my private photos unless I paid him money", "relevant_sections": ["BNS::308"], "difficulty": "easy", "note": "extortion"}
+{"id": "s22", "query": "an angry neighbour smashed my car windows out of spite", "relevant_sections": ["BNS::324"], "difficulty": "easy", "note": "mischief / property damage"}
+{"id": "s23", "query": "a stranger entered my locked farmland without any permission", "relevant_sections": ["BNS::329"], "difficulty": "easy", "note": "criminal trespass"}
+{"id": "s24", "query": "he fired a gun at me intending to kill but I survived", "relevant_sections": ["BNS::109"], "difficulty": "medium", "note": "attempt to murder"}
+{"id": "s25", "query": "he beat me so badly with a rod that I permanently lost sight in one eye", "relevant_sections": ["BNS::117"], "difficulty": "easy", "note": "voluntarily causing grievous hurt"}
+{"id": "s26", "query": "a man took away a 15-year-old girl without her parents' consent", "relevant_sections": ["BNS::137"], "difficulty": "easy", "note": "kidnapping from lawful guardianship"}
+{"id": "s27", "query": "they locked me inside a room for two days against my will", "relevant_sections": ["BNS::126", "BNS::127"], "difficulty": "medium", "note": "wrongful restraint + confinement"}
+{"id": "s28", "query": "a witness deliberately lied under oath during my court case", "relevant_sections": ["BNS::227", "BNS::229"], "difficulty": "medium", "note": "giving false evidence"}
+{"id": "s29", "query": "a candidate paid voters cash to vote for him in the election", "relevant_sections": ["BNS::170", "BNS::173"], "difficulty": "medium", "note": "bribery at elections"}
+{"id": "s30", "query": "a man pretended to be a police officer to extort money from shopkeepers", "relevant_sections": ["BNS::204"], "difficulty": "easy", "note": "personating a public servant"}
+{"id": "s31", "query": "he killed a man in a sudden fight right after being gravely provoked", "relevant_sections": ["BNS::100", "BNS::105"], "difficulty": "hard", "note": "culpable homicide not amounting to murder"}
+{"id": "s32", "query": "constant harassment by her in-laws drove my sister to take her own life", "relevant_sections": ["BNS::108"], "difficulty": "medium", "note": "abetment of suicide"}
+{"id": "s33", "query": "girls were brought from villages and forced into bonded labour", "relevant_sections": ["BNS::143"], "difficulty": "medium", "note": "trafficking of persons"}
+{"id": "s34", "query": "someone posing as my bank tricked me into transferring my savings online", "relevant_sections": ["BNS::318", "BNS::319"], "difficulty": "medium", "note": "cheating by personation"}
+{"id": "s35", "query": "robbers badly beat the security guard while looting the shop", "relevant_sections": ["BNS::309", "BNS::311"], "difficulty": "medium", "note": "robbery with hurt"}
+{"id": "s36", "query": "a violent mob of fifty people gathered and attacked shops in the market", "relevant_sections": ["BNS::189", "BNS::190", "BNS::191"], "difficulty": "medium", "note": "unlawful assembly + rioting"}
+{"id": "s37", "query": "someone circulated posts deliberately inciting hatred between two religions", "relevant_sections": ["BNS::196"], "difficulty": "medium", "note": "promoting enmity between groups"}
+{"id": "s38", "query": "I found a lost wallet full of cash and quietly kept the money for myself", "relevant_sections": ["BNS::314"], "difficulty": "hard", "note": "dishonest misappropriation of found property"}
+{"id": "s39", "query": "several men assaulted one woman together in a group", "relevant_sections": ["BNS::70"], "difficulty": "medium", "note": "gang rape"}
+{"id": "s40", "query": "he beat his pregnant wife causing her to lose the unborn baby", "relevant_sections": ["BNS::88", "BNS::89"], "difficulty": "medium", "note": "causing miscarriage without consent"}
+{"id": "s41", "query": "my neighbour knowingly hid a wanted criminal in his house", "relevant_sections": ["BNS::249"], "difficulty": "medium", "note": "harbouring an offender"}
+{"id": "s42", "query": "someone knowingly did an act that spread a dangerous infectious disease", "relevant_sections": ["BNS::271", "BNS::272"], "difficulty": "medium", "note": "act likely to spread infection"}
+{"id": "s43", "query": "a man buried a body to make the evidence of the killing disappear", "relevant_sections": ["BNS::238"], "difficulty": "medium", "note": "causing disappearance of evidence"}
+{"id": "s44", "query": "someone filed a completely fake police complaint to get me arrested", "relevant_sections": ["BNS::217", "BNS::248"], "difficulty": "medium", "note": "false charge / false info to public servant"}
+{"id": "s45", "query": "a man deliberately groped a woman in a crowded bus", "relevant_sections": ["BNS::74"], "difficulty": "easy", "note": "outraging modesty of a woman"}
+{"id": "s46", "query": "a syndicate runs extortion, kidnapping and contract killings as an organised business", "relevant_sections": ["BNS::111"], "difficulty": "hard", "note": "organised crime"}
+{"id": "s47", "query": "a bomb was planted in a crowded market to spread terror against the government", "relevant_sections": ["BNS::113"], "difficulty": "medium", "note": "terrorist act"}
+{"id": "s48", "query": "a group circulated material urging armed rebellion to break a state away from India", "relevant_sections": ["BNS::152"], "difficulty": "hard", "note": "act endangering sovereignty and integrity"}
+{"id": "s49", "query": "armed insurgents attacked an army base trying to overthrow the government", "relevant_sections": ["BNS::147"], "difficulty": "hard", "note": "waging war against the Government"}
+{"id": "s50", "query": "he lunged to snatch a woman's chain but was caught before he could grab it", "relevant_sections": ["BNS::62", "BNS::304"], "difficulty": "hard", "note": "attempt + snatching"}
