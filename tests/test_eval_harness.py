@@ -1,4 +1,4 @@
-"""Tests for the RAGAS + AIBE harness plumbing (src/eval/ragas_eval.py, aibe_eval.py).
+"""Tests for the RAGAS + MCQ harness plumbing (src/eval/ragas_eval.py, mcq_eval.py).
 
 All keyless: agent runs, retrieval, ragas, and the gated dataset are injected as fakes,
 so this pins the pure logic — reference building, sample extraction, RPM pacing, metric
@@ -8,7 +8,7 @@ without a key, an index, or ragas installed. The live scoring itself runs out-of
 
 from __future__ import annotations
 
-from src.eval import aibe_eval, ragas_eval
+from src.eval import mcq_eval, ragas_eval
 
 
 # --- fakes -------------------------------------------------------------------
@@ -124,25 +124,47 @@ class TestAggregate:
         assert ragas_eval.aggregate(rows).faithfulness == 0.0
 
 
-# =============================== AIBE ========================================
+# ============================ MCQ (BhashaBench) ==============================
 class TestScore:
     def test_all_correct(self) -> None:
-        assert aibe_eval.score([0, 1, 2], [0, 1, 2]) == 1.0
+        assert mcq_eval.score([0, 1, 2], [0, 1, 2]) == 1.0
 
     def test_half(self) -> None:
-        assert aibe_eval.score([0, 9], [0, 1]) == 0.5
+        assert mcq_eval.score([0, 9], [0, 1]) == 0.5
 
     def test_empty_is_zero(self) -> None:
-        assert aibe_eval.score([], []) == 0.0
+        assert mcq_eval.score([], []) == 0.0
+
+
+class TestExtractIpcRefs:
+    def test_section_then_ipc(self) -> None:
+        assert mcq_eval._extract_ipc_refs("under Section 302 of the IPC") == ["302"]
+
+    def test_ipc_then_section_and_letter(self) -> None:
+        # reverse order + trailing letter + whitespace squeezed
+        assert mcq_eval._extract_ipc_refs("u/s 124A IPC was invoked") == ["124A"]
+
+    def test_hyphenated_suffix_survives(self) -> None:
+        # BhashaBench writes "498-A" / "124-A"; the suffix is significant (498A != 498),
+        # so it must be kept, not stripped. This is the real-data bug the loader caught.
+        assert mcq_eval._extract_ipc_refs("Section 498-A of the Indian Penal Code") == ["498A"]
+        assert mcq_eval._extract_ipc_refs("Section 124-A of the Indian Penal Code") == ["124A"]
+
+    def test_ignores_non_ipc_section(self) -> None:
+        # CrPC section must NOT be picked up — only IPC is bridged
+        assert mcq_eval._extract_ipc_refs("Section 200 of Cr.P.C.") == []
+
+    def test_no_citation(self) -> None:
+        assert mcq_eval._extract_ipc_refs("Modus Operandi stands for") == []
 
 
 class TestAnswerMcq:
     def test_clamps_out_of_range_index(self) -> None:
         class _FakeClient:
             def create(self, **_):
-                return aibe_eval._MCQChoice(answer_idx=99)  # model hallucinates OOB
+                return mcq_eval._MCQChoice(answer_idx=99)  # model hallucinates OOB
 
-        idx = aibe_eval.answer_mcq(
+        idx = mcq_eval.answer_mcq(
             "q", ["a", "b", "c"],
             retriever=_FakeRetriever(), client=_FakeClient(),
         )
@@ -151,9 +173,9 @@ class TestAnswerMcq:
     def test_negative_index_clamped_to_zero(self) -> None:
         class _FakeClient:
             def create(self, **_):
-                return aibe_eval._MCQChoice(answer_idx=-5)
+                return mcq_eval._MCQChoice(answer_idx=-5)
 
-        assert aibe_eval.answer_mcq(
+        assert mcq_eval.answer_mcq(
             "q", ["a", "b"], retriever=_FakeRetriever(), client=_FakeClient()
         ) == 0
 
@@ -175,7 +197,7 @@ class TestComputeResult:
         # 302 maps -> bridge-dependent; 999 unmapped; [] none. Only q1 is on the bridge.
         mapping = {"302": "103"}
         preds = [0, 0, 0]  # q1 right, q2 wrong, q3 right -> 2/3 overall
-        res = aibe_eval.compute_result(self._slice(), preds, mapping)
+        res = mcq_eval.compute_result(self._slice(), preds, mapping)
         assert res.total == 3 and res.correct == 2
         assert abs(res.accuracy - 2 / 3) < 1e-9
         assert res.bridge_resolved == 1          # only q1
@@ -183,7 +205,7 @@ class TestComputeResult:
         assert res.baseline_accuracy is None
 
     def test_baseline_included_when_given(self) -> None:
-        res = aibe_eval.compute_result(
+        res = mcq_eval.compute_result(
             self._slice(), [0, 1, 0], {"302": "103"}, baseline_predictions=[1, 1, 1]
         )
         assert res.accuracy == 1.0
@@ -197,7 +219,7 @@ class TestRunAibeOrchestration:
             {"question": "q1", "options": ["a", "b"], "answer_idx": 0, "ipc_refs": ["302"]},
             {"question": "q2", "options": ["a", "b"], "answer_idx": 1, "ipc_refs": []},
         ]
-        res = aibe_eval.run_aibe_eval(
+        res = mcq_eval.run_mcq_eval(
             slice_=slice_,
             mcq_fn=lambda q, opts: 0,          # always picks index 0
             ipc_bns_mapping={"302": "103"},

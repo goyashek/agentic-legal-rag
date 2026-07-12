@@ -206,8 +206,8 @@ def load_ipc_bns_mapping(comparison_pdf: str | Path) -> dict[str, str]:
 
     Parsed from the "COMPARISON SUMMARY BNS to IPC" table (BNS section in the left
     column, IPC section in the second numeric column). The fast path uses it to
-    resolve "302 IPC" -> BNS 103, and aibe_eval uses it because a lot of AIBE
-    questions still cite repealed IPC. We collapse BNS sub-sections (2(8)) to the
+    resolve "302 IPC" -> BNS 103, and mcq_eval uses it because a lot of the
+    BhashaBench criminal slice still cites repealed IPC. We collapse BNS sub-sections (2(8)) to the
     section number and skip "New" (no IPC equivalent). First write wins, so an IPC
     section that appears once maps to the first BNS section it lines up with.
     """
