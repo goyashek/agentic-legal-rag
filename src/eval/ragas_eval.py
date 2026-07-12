@@ -35,6 +35,53 @@ from src.eval.retrieval_baseline import load_scenarios  # same jsonl loader, don
 # to_pandas() column names, so aggregation can key off them directly.
 METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
 
+# RAGAS defaults its evaluator embeddings to Google's text-embedding-004; kept in one
+# place so a model rename is a one-liner.
+_RAGAS_EMBED_MODEL = "models/text-embedding-004"
+
+
+def _shim_dead_vertexai_import() -> None:
+    """ragas 0.4.x hard-imports `langchain_community.chat_models.vertexai.ChatVertexAI`,
+    a path langchain-community 0.4.x removed (sunset). There's no compatible version set —
+    getting it back pins old langchain-core, which breaks the agent's langchain-google-genai
+    4.x. `ChatVertexAI` is only used in an isinstance list ragas never hits on the Gemini
+    path, so inject a placeholder module before `import ragas` instead of downgrading the
+    whole stack. Idempotent.
+    """
+    import sys
+    import types
+
+    name = "langchain_community.chat_models.vertexai"
+    if name in sys.modules:
+        return
+    mod = types.ModuleType(name)
+    mod.ChatVertexAI = type("ChatVertexAI", (), {})  # never instantiated on Gemini
+    sys.modules[name] = mod
+
+
+def _ragas_evaluator():
+    """Build the (llm, embeddings) ragas scores with — Gemini flash-lite, NOT OpenAI.
+
+    ragas metrics are themselves LLM-judged and default to OpenAI (401 without a key), so
+    every metric gets this bound explicitly. Reuses the agent's key + flash-lite model
+    resolution so the evaluator rides the same 500/day tier as the pipeline.
+    """
+    _shim_dead_vertexai_import()
+    from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+    from ragas.llms import LangchainLLMWrapper
+
+    from src.agent.llm import _model_for, _resolve_key
+
+    key = _resolve_key()
+    llm = LangchainLLMWrapper(
+        ChatGoogleGenerativeAI(model=_model_for("flash"), google_api_key=key, temperature=0)
+    )
+    embeddings = LangchainEmbeddingsWrapper(
+        GoogleGenerativeAIEmbeddings(model=_RAGAS_EMBED_MODEL, google_api_key=key)
+    )
+    return llm, embeddings
+
 
 @dataclass
 class RagasScores:
@@ -173,6 +220,7 @@ def run_ragas_eval(
         scenarios, answer_fn=answer_fn, corpus=corpus, pace_seconds=pace_seconds
     )
 
+    llm, embeddings = _ragas_evaluator()
     from ragas import EvaluationDataset, evaluate
     from ragas.metrics import (
         answer_relevancy,
@@ -181,12 +229,20 @@ def run_ragas_eval(
         faithfulness,
     )
 
+    # Bind the Gemini evaluator to every metric — without this ragas silently defaults
+    # to OpenAI and 401s (no key). answer_relevancy also needs the embeddings.
+    for metric in (faithfulness, answer_relevancy, context_precision, context_recall):
+        metric.llm = llm
+    answer_relevancy.embeddings = embeddings
+
     dataset = EvaluationDataset.from_list(
         [{k: v for k, v in r.items() if k != "difficulty"} for r in rows]
     )
     result = evaluate(
         dataset=dataset,
         metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
+        llm=llm,
+        embeddings=embeddings,
     )
 
     scored = result.to_pandas().to_dict("records")
