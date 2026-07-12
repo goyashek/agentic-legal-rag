@@ -33,6 +33,15 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 # default only works with billing (or point GEMINI_MODEL_PRO at a flash tier).
 _DEFAULT_MODELS: dict[Tier, str] = {"flash": "gemini-3.1-flash-lite", "pro": "gemini-2.5-pro"}
 
+# Alternate backend: a local OpenAI-compatible gateway (kiro-gateway) fronting Claude
+# via a Kiro subscription. Flip LLM_BACKEND=kiro to route every node through it instead
+# of Gemini — no node code changes, since they all call get_client(). Used to escape the
+# Gemini free-tier RPM wall for eval runs. Claude models are documented AS Claude (honest
+# deviation from D2). TOOLS mode is required: Haiku's JSON mode wraps output in ```json
+# fences that instructor can't parse; tool-calling returns clean structured output.
+_KIRO_DEFAULT_MODELS: dict[Tier, str] = {"flash": "claude-haiku-4.5", "pro": "claude-sonnet-4.5"}
+_KIRO_BASE_URL = "http://localhost:8000/v1"
+
 # Sync clients are safe to reuse process-wide, so cache them. Async clients are
 # NOT cached: instructor's google-genai async client must live in the caller's
 # event loop, and reusing one across loops raises "attached to a different loop".
@@ -46,8 +55,19 @@ def _load_env() -> None:
     load_dotenv()
 
 
+def _backend() -> str:
+    """Which LLM backend to use: 'kiro' (local Claude gateway) or 'gemini' (default)."""
+    _load_env()
+    return os.getenv("LLM_BACKEND", "gemini").strip().lower()
+
+
 def has_api_key() -> bool:
-    """True if a Gemini key is available. Gate live-LLM tests on this."""
+    """True if the configured backend can make a live call. Gate live-LLM tests on this.
+
+    kiro backend needs no Gemini key (the gateway holds its own auth); gemini needs one.
+    """
+    if _backend() == "kiro":
+        return True
     _load_env()
     return bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
 
@@ -72,16 +92,70 @@ def _resolve_key() -> str:
 
 
 def _model_for(tier: Tier) -> str:
+    if _backend() == "kiro":
+        env_name = "KIRO_MODEL_PRO" if tier == "pro" else "KIRO_MODEL_FLASH"
+        return os.getenv(env_name) or _KIRO_DEFAULT_MODELS[tier]
     env_name = "GEMINI_MODEL_PRO" if tier == "pro" else "GEMINI_MODEL_FLASH"
     return os.getenv(env_name) or _DEFAULT_MODELS[tier]
 
 
-def get_client(tier: Tier = "flash", *, async_client: bool = False):
-    """Return an instructor-wrapped Gemini client for the tier.
+class _ModelBoundClient:
+    """Wraps an instructor OpenAI client to inject `model=` into every `.create`.
 
-    Sync clients are cached per tier; async clients are built fresh (they must
-    live in the caller's event loop). Raises if no API key is configured.
+    The Gemini path bakes the model into `from_provider("google/<model>")`, so nodes call
+    `client.create(messages=..., response_model=...)` with NO `model=`. The OpenAI path
+    (kiro-gateway) needs `model=` per call. This wrapper supplies it from the tier so the
+    six nodes stay backend-agnostic — they never learn which model or backend they're on.
+    Forwards the underlying return verbatim, so it works for sync (object) and async
+    (coroutine the caller awaits) alike.
     """
+
+    def __init__(self, client, model: str) -> None:
+        self._client = client
+        self._model = model
+
+    def create(self, **kwargs):
+        kwargs.setdefault("model", self._model)
+        return self._client.create(**kwargs)
+
+
+def _get_kiro_client(tier: Tier, *, async_client: bool):
+    """model-bound instructor client over the local kiro-gateway (Claude, OpenAI-compatible).
+
+    TOOLS mode is mandatory (Haiku's JSON mode returns ```json-fenced output instructor
+    can't parse). Key is the gateway's own token, not a Gemini key. Sync clients cache;
+    async built fresh (same event-loop rule as the Gemini path).
+    """
+    import instructor
+    from openai import AsyncOpenAI, OpenAI
+
+    key = os.getenv("KIRO_API_KEY", "kiro")
+    base_url = os.getenv("KIRO_BASE_URL", _KIRO_BASE_URL)
+    model = _model_for(tier)
+    if async_client:
+        raw = instructor.from_openai(
+            AsyncOpenAI(base_url=base_url, api_key=key), mode=instructor.Mode.TOOLS
+        )
+        return _ModelBoundClient(raw, model)
+    cache_key = f"kiro:{tier}"
+    if cache_key not in _SYNC_CLIENTS:
+        raw = instructor.from_openai(
+            OpenAI(base_url=base_url, api_key=key), mode=instructor.Mode.TOOLS
+        )
+        _SYNC_CLIENTS[cache_key] = _ModelBoundClient(raw, model)
+    return _SYNC_CLIENTS[cache_key]
+
+
+def get_client(tier: Tier = "flash", *, async_client: bool = False):
+    """Return an instructor-wrapped client for the tier, per the active backend.
+
+    LLM_BACKEND=kiro routes to the local Claude gateway; otherwise Gemini. The model
+    string is set inside get_client so nodes stay backend-agnostic. Sync clients are
+    cached per tier; async clients are built fresh (they must live in the caller's loop).
+    """
+    if _backend() == "kiro":
+        return _get_kiro_client(tier, async_client=async_client)
+
     _resolve_key()
     import instructor
 
