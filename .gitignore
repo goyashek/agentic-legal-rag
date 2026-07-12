@@ -39,7 +39,12 @@ qdrant_storage/
 # --- os ---
 .DS_Store
 
-# --- local planning/notes docs: keep out of git, only README is tracked ---
+# --- local planning/notes docs: keep out of git; published docs live in docs/ ---
 *.md
 !README.md
+!docs/**/*.md
 
+# throwaway one-off eval drivers (regenerate as needed)
+mcq_run.py
+ragas_run.py
+*_run.log

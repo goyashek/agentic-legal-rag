@@ -25,6 +25,7 @@ Scenario file: data/eval/scenarios.jsonl (kept in git, see .gitignore).
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -35,9 +36,11 @@ from src.eval.retrieval_baseline import load_scenarios  # same jsonl loader, don
 # to_pandas() column names, so aggregation can key off them directly.
 METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
 
-# RAGAS defaults its evaluator embeddings to Google's text-embedding-004; kept in one
-# place so a model rename is a one-liner.
-_RAGAS_EMBED_MODEL = "models/text-embedding-004"
+# RAGAS evaluator embeddings — Google's Gemini embedding, on its OWN free quota (0/100),
+# separate from the Cerebras request cap, so the judge's embedding calls don't eat the
+# agent's per-hour budget. (text-embedding-004 was retired -> 404; gemini-embedding-001 is
+# the stable replacement.) Kept in one place so a model rename is a one-liner.
+_RAGAS_EMBED_MODEL = "models/gemini-embedding-001"
 
 
 def _shim_dead_vertexai_import() -> None:
@@ -60,23 +63,60 @@ def _shim_dead_vertexai_import() -> None:
 
 
 def _ragas_evaluator():
-    """Build the (llm, embeddings) ragas scores with — Gemini flash-lite, NOT OpenAI.
+    """Build the (llm, embeddings) ragas scores with — matching the agent's LLM_BACKEND.
 
     ragas metrics are themselves LLM-judged and default to OpenAI (401 without a key), so
-    every metric gets this bound explicitly. Reuses the agent's key + flash-lite model
-    resolution so the evaluator rides the same 500/day tier as the pipeline.
+    the judge LLM gets bound explicitly to the SAME backend/model the agent used, so the
+    eval record is single-provenance (judge model == answer model). The judge LLM is
+    throttled by langchain's native InMemoryRateLimiter (max_bucket_size=1, no bursting) —
+    ragas fans its judge calls out concurrently and bypasses the agent's own limiter, so
+    this is the throttle that keeps the judge under the free RPM cap.
+
+    Embeddings always come from Google's Gemini embedding, on its own free quota (see
+    _RAGAS_EMBED_MODEL) — Cerebras has no embeddings endpoint, and Google's separate quota
+    means the judge's embedding calls don't eat the agent backend's per-hour request cap.
     """
     _shim_dead_vertexai_import()
-    from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+    from langchain_core.rate_limiters import InMemoryRateLimiter
+    from langchain_google_genai import GoogleGenerativeAIEmbeddings
     from ragas.embeddings import LangchainEmbeddingsWrapper
     from ragas.llms import LangchainLLMWrapper
 
-    from src.agent.llm import _model_for, _resolve_key
+    from src.agent.llm import _DEFAULT_RPM, _OPENAI_BACKENDS, _backend, _model_for
 
-    key = _resolve_key()
-    llm = LangchainLLMWrapper(
-        ChatGoogleGenerativeAI(model=_model_for("flash"), google_api_key=key, temperature=0)
+    backend = _backend()
+    # Throttle the judge to the backend's RPM (LLM_RPM overrides), max_bucket_size=1 so
+    # concurrent ragas judge calls can't burst — the one gap the agent limiter can't cover.
+    rpm = int(os.getenv("LLM_RPM") or _DEFAULT_RPM.get(backend, 15))
+    limiter = InMemoryRateLimiter(
+        requests_per_second=(rpm / 60.0) if rpm > 0 else 1e6, max_bucket_size=1
     )
+
+    if backend in _OPENAI_BACKENDS:
+        from langchain_openai import ChatOpenAI
+
+        cfg = _OPENAI_BACKENDS[backend]
+        judge = ChatOpenAI(
+            model=_model_for("flash"),
+            base_url=os.getenv(cfg["base_url_env"]) or cfg["base_url"],
+            api_key=os.getenv(cfg["key_env"]) or cfg["default_key"],
+            temperature=0,
+            rate_limiter=limiter,
+        )
+    else:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        from src.agent.llm import _resolve_key
+
+        judge = ChatGoogleGenerativeAI(
+            model=_model_for("flash"),
+            google_api_key=_resolve_key(),
+            temperature=0,
+            rate_limiter=limiter,
+        )
+
+    key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    llm = LangchainLLMWrapper(judge)
     embeddings = LangchainEmbeddingsWrapper(
         GoogleGenerativeAIEmbeddings(model=_RAGAS_EMBED_MODEL, google_api_key=key)
     )
@@ -181,7 +221,7 @@ def aggregate(scored_rows: list[dict]) -> RagasScores:
     """
 
     def _valid(v) -> bool:
-        return isinstance(v, (int, float)) and v == v  # v == v is False only for NaN
+        return isinstance(v, int | float) and v == v  # v == v is False only for NaN
 
     def _mean(rows: list[dict], metric: str) -> float:
         vals = [r[metric] for r in rows if _valid(r.get(metric))]
@@ -221,7 +261,7 @@ def run_ragas_eval(
     )
 
     llm, embeddings = _ragas_evaluator()
-    from ragas import EvaluationDataset, evaluate
+    from ragas import EvaluationDataset, RunConfig, evaluate
     from ragas.metrics import (
         answer_relevancy,
         context_precision,
@@ -234,15 +274,25 @@ def run_ragas_eval(
     for metric in (faithfulness, answer_relevancy, context_precision, context_recall):
         metric.llm = llm
     answer_relevancy.embeddings = embeddings
+    # answer_relevancy defaults to strictness=3 -> asks the judge for n=3 generations, which
+    # Cerebras's endpoint 400s ("n > 1 is not currently supported"). Force a single
+    # generation; loses the self-consistency averaging but is the only n=1 backend option.
+    answer_relevancy.strictness = 1
 
     dataset = EvaluationDataset.from_list(
         [{k: v for k, v in r.items() if k != "difficulty"} for r in rows]
     )
+    # max_workers=1: ragas otherwise fans ALL judge jobs out at once; against a rate-limited
+    # judge (5 RPM) the later jobs sit in a queue and blow ragas's per-job timeout -> spurious
+    # 0.0 scores. Serial submission means each job's timer starts only when it runs. Generous
+    # timeout for the slow paced judge. This — not the LLM-level limiter — is the real burst fix.
+    run_config = RunConfig(max_workers=1, timeout=600)
     result = evaluate(
         dataset=dataset,
         metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
         llm=llm,
         embeddings=embeddings,
+        run_config=run_config,
     )
 
     scored = result.to_pandas().to_dict("records")

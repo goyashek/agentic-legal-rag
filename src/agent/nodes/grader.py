@@ -17,6 +17,7 @@ shared async Flash client) so tests grade with a fake at zero quota.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from pydantic import BaseModel, Field
 
@@ -78,7 +79,12 @@ def grade_chunks(
     """
     if not chunks:
         return []
-    client = client or get_client("flash", async_client=True)
+    # GRADER_TIER lets the grader run on a stronger tier than the other flash nodes.
+    # Default "flash" = unchanged; "pro" was added when deepseek-v4-flash graded too
+    # strictly (rejected clearly-relevant sections -> agent bailed to low-confidence).
+    if client is None:
+        tier = os.getenv("GRADER_TIER", "flash").strip().lower()
+        client = get_client("pro" if tier == "pro" else "flash", async_client=True)
     verdicts = asyncio.run(_agrade_chunks(query, chunks, client))
     return [c for c, keep in zip(chunks, verdicts, strict=True) if keep]
 
