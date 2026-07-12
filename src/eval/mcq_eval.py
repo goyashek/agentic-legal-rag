@@ -79,6 +79,8 @@ class MCQResult:
     bridge_resolved: int          # questions whose repealed-IPC refs mapped to BNS
     bridge_accuracy: float        # accuracy on just the bridge-dependent subset
     baseline_accuracy: float | None = None   # same questions, no-RAG Gemini for comparison
+    # no-RAG on the bridge subset — the head-to-head that matters
+    baseline_bridge_accuracy: float | None = None
 
 
 class _MCQChoice(BaseModel):
@@ -198,6 +200,32 @@ def answer_mcq(
     return max(0, min(choice.answer_idx, len(options) - 1))
 
 
+def answer_mcq_no_rag(question: str, options: list[str], *, client=None) -> int:
+    """No-RAG baseline: same model, same clamping, NO retrieval — Gemini answers from its
+    own parametric knowledge. This is the comparison that shows RAG's lift; pass it as
+    `baseline_fn` so one paced run scores system + baseline together (don't burn the RPD
+    cap on two separate runs). Signature-compatible with `answer_mcq` for the runner.
+    """
+    if not options:
+        raise ValueError("MCQ needs at least one option")
+    if client is None:
+        from src.agent.llm import get_client
+
+        client = get_client("flash")
+    numbered = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
+    prompt = (
+        "Answer this Indian criminal-law multiple-choice question from your own knowledge.\n\n"
+        f"Question: {question}\n\nOptions:\n{numbered}\n\n"
+        "Return the 0-based index of the single best option."
+    )
+    choice: _MCQChoice = client.create(  # type: ignore[attr-defined]
+        messages=[{"role": "user", "content": prompt}],
+        response_model=_MCQChoice,
+        temperature=0,
+    )
+    return max(0, min(choice.answer_idx, len(options) - 1))
+
+
 def score(predictions: list[int], answers: list[int]) -> float:
     """Accuracy over aligned predicted/gold indices. 0.0 on an empty set."""
     if not answers:
@@ -232,6 +260,13 @@ def compute_result(
     bridge_preds = [predictions[i] for i in bridge_idx]
     bridge_answers = [answers[i] for i in bridge_idx]
 
+    baseline_acc = baseline_bridge_acc = None
+    if baseline_predictions is not None:
+        baseline_acc = score(baseline_predictions, answers)
+        # no-RAG on the SAME bridge subset — the head-to-head that isolates the IPC->BNS
+        # bridge's value from the procedure/evidence noise that drags the overall number.
+        baseline_bridge_acc = score([baseline_predictions[i] for i in bridge_idx], bridge_answers)
+
     return MCQResult(
         total=total,
         correct=correct,
@@ -239,9 +274,8 @@ def compute_result(
         criminal_slice_size=total,
         bridge_resolved=len(bridge_idx),
         bridge_accuracy=score(bridge_preds, bridge_answers),
-        baseline_accuracy=(
-            score(baseline_predictions, answers) if baseline_predictions is not None else None
-        ),
+        baseline_accuracy=baseline_acc,
+        baseline_bridge_accuracy=baseline_bridge_acc,
     )
 
 

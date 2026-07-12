@@ -210,6 +210,12 @@ class TestComputeResult:
         )
         assert res.accuracy == 1.0
         assert abs(res.baseline_accuracy - 1 / 3) < 1e-9  # baseline: only q2 right
+        # bridge subset is q1 (ans 0); baseline predicted 1 -> wrong -> 0.0
+        assert res.baseline_bridge_accuracy == 0.0
+
+    def test_baseline_bridge_none_without_baseline(self) -> None:
+        res = mcq_eval.compute_result(self._slice(), [0, 1, 0], {"302": "103"})
+        assert res.baseline_bridge_accuracy is None
 
 
 class TestRunAibeOrchestration:
