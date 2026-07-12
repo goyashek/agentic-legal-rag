@@ -186,11 +186,15 @@ def answer_mcq(
     )
     numbered = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
     prompt = (
-        "You are answering an Indian criminal-law multiple-choice question using ONLY "
-        "the retrieved statutory sections below. The question may cite repealed IPC/CrPC/"
-        "Evidence sections; the retrieved sections are the current BNS/BNSS/BSA equivalents.\n\n"
+        "You are answering an Indian criminal-law multiple-choice question. Use the "
+        "retrieved statutory sections below as your primary evidence. The question may cite "
+        "repealed IPC/CrPC/Evidence sections; the retrieved sections are the current "
+        "BNS/BNSS/BSA equivalents.\n\n"
         f"Sections:\n{context}\n\nQuestion: {question}\n\nOptions:\n{numbered}\n\n"
-        "Return the 0-based index of the single best-supported option."
+        "You MUST pick exactly one option even if the retrieved sections are incomplete or "
+        "don't contain the exact provision — fall back to your own legal knowledge and choose "
+        "the most likely answer. Never refuse or ask for more information; this is a forced-"
+        "choice question. Return the 0-based index of the single best option."
     )
     choice: _MCQChoice = client.create(  # type: ignore[attr-defined]
         messages=[{"role": "user", "content": prompt}],
@@ -312,19 +316,23 @@ def run_mcq_eval(
 
         _, ipc_bns_mapping = _resolver()
 
-    predictions: list[int] = []
-    for i, q in enumerate(slice_):
-        if i > 0 and pace_seconds > 0:
-            sleep(pace_seconds)
-        predictions.append(mcq_fn(q["question"], q["options"]))
-
-    baseline_predictions: list[int] | None = None
-    if with_baseline and baseline_fn is not None:
-        baseline_predictions = []
+    def _run_arm(fn) -> list[int]:
+        # One failed question (model refuses / unparseable output) must not abort the whole
+        # batch — record -1 (never matches a 0-3 gold answer, so it counts as wrong) and go on.
+        preds: list[int] = []
         for i, q in enumerate(slice_):
             if i > 0 and pace_seconds > 0:
                 sleep(pace_seconds)
-            baseline_predictions.append(baseline_fn(q["question"], q["options"]))
+            try:
+                preds.append(fn(q["question"], q["options"]))
+            except Exception:  # noqa: BLE001 - eval resilience: a bad Q shouldn't kill 150
+                preds.append(-1)
+        return preds
+
+    predictions = _run_arm(mcq_fn)
+    baseline_predictions: list[int] | None = None
+    if with_baseline and baseline_fn is not None:
+        baseline_predictions = _run_arm(baseline_fn)
 
     return compute_result(
         slice_, predictions, ipc_bns_mapping, baseline_predictions=baseline_predictions
