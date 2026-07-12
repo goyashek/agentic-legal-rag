@@ -4,7 +4,7 @@
 
 > ⚠️ Statutory information, not legal advice. Not a substitute for a lawyer.
 
-> 🚧 **Status:** scaffolding complete, implementation in progress. See `NOTES.md` for the locked decisions and `../PROJECT.md` for the 4-week build plan. Sections marked _TODO_ fill in as the build lands.
+> 🚧 **Status:** scaffolding complete, implementation in progress. See `NOTES.md` for the locked decisions and `PROJECT.md` for the 4-week build plan. Sections marked _TODO_ fill in as the build lands.
 
 ---
 
@@ -35,13 +35,13 @@ Self-correction loop budget = 2.
 
 ## Competitor comparison
 
-_TODO: comparison table (from `../analysis.md` §2)._
+_TODO: comparison table (from `analysis.md` §2)._
 
 ## Evaluation
 
 _TODO: fill from `notebooks/03_eval_dashboard.ipynb`._
 
-- **RAGAS (real generative task):** faithfulness / answer-relevancy / context-precision / context-recall on 50 hand-labeled scenarios.
+- **RAGAS (real generative task):** faithfulness / answer-relevancy / context-precision / context-recall on the **50-scenario labeled set** (`data/eval/scenarios.jsonl`, 19 easy / 24 medium / 7 hard, 66 distinct BNS sections). Every labeled section is verified to exist in the ingested corpus before it enters the set.
 - **AIBE (external comparability, _with caveats_):** criminal-slice accuracy vs a no-RAG baseline. Reported honestly: AIBE 4-16 predate 2024 and cite repealed IPC, so this partly measures the IPC to BNS bridge (reported separately). It's not a bare bar-exam score. See the "AIBE reality check" note in `NOTES.md`.
 - **Ablations:** hybrid vs dense/sparse; reranker on/off.
 
