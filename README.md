@@ -76,43 +76,36 @@ first-class goal here, so the eval record stays honest about provenance.
 
 ### Retrieval (pure, model-agnostic — no LLM)
 
-Frozen pre-tuning baseline over the 50-scenario labeled set (`data/eval/scenarios.jsonl`,
+Current post-repair baseline over the 50-scenario labeled set (`data/eval/scenarios.jsonl`,
 19 easy / 24 medium / 7 hard, 66 distinct BNS sections; every labeled section verified to
-exist in the corpus before it enters the set):
+exist in the corpus before it enters the set). Both rows use the rebuilt 1,151-chunk corpus:
 
 | config | P@5 | Recall@5 | MRR |
 |---|---|---|---|
-| hybrid only | 0.148 | 0.550 | **0.500** |
-| hybrid + reranker (default) | 0.170 | **0.653** | 0.413 |
+| hybrid only | 0.132 | 0.527 | **0.508** |
+| hybrid + reranker (default) | 0.164 | **0.630** | 0.422 |
 
-The reranker is a **recall-vs-rank trade, not a free win**: the cross-encoder pulls ~10 pts
-more relevant sections into the top-5 (recall — the metric that matters most for "don't miss
-an applicable offence") but demotes the single best result on average (MRR −0.087). Kept on
-by default because breadth beats peak-rank for this domain and the grader re-sorts downstream,
-but the MRR cost is documented, not buried. (P@5 is low by construction — most scenarios have
-1–3 relevant sections, capping a perfect single-answer at 0.20; Recall@5 and MRR are the
-honest signals.)
+The reranker is a **recall-vs-rank trade, not a free win**: it adds 0.103 Recall@5 and 0.032
+P@5, but drops MRR by 0.086. It stays on by default because missing an applicable section is
+more costly here than losing a little peak rank. (P@5 is low by construction — most scenarios
+have 1–3 relevant sections, capping a perfect single-answer at 0.20.)
 
-### RAGAS (real generative task — DeepSeek `deepseek-v4-pro` grader / `deepseek-v4-flash` nodes)
+### RAGAS (real generative task — DeepSeek Flash judge / Flash control nodes / Pro generator)
 
-On a 3-scenario slice, the deterministic pipeline behaved exactly as designed, and the result
-is a finding worth more than a headline metric:
+Complete RAGAS-50 results are intentionally sobering. The run uses a DeepSeek Flash judge and
+local BGE-small embeddings; the agent itself uses Flash control nodes and a Pro final generator.
 
 | metric | value | reading |
 |---|---|---|
-| context_precision | **0.94–1.0** | retrieval ranks the right sections at the top |
-| context_recall | **0.60–0.65** | valid; per-difficulty easy/medium/hard signal intact |
-| faithfulness | **0.0** | the anti-hallucination checker **refused** an ungrounded answer |
+| faithfulness | 0.262 | too low for a legal-facing answer system |
+| answer relevancy | 0.419 | too often misses the user's actual need |
+| context precision | 0.671 | useful, but noisy retrieved context remains |
+| context recall | 0.722 | coverage is the strongest measured part |
 
-The faithfulness `0.0` is **not the system hallucinating — it is the opposite.** For "someone
-stole my bike," the generator padded BNS 303's base punishment beyond the retrieved text; the
-hallucination checker caught the ungrounded claim and the system returned a low-confidence
-answer rather than emit it. Root cause is upstream in **chunking**, not the agent: BNS 303's
-base-punishment clause is split across a chunk boundary (the section's 16 illustrations push it
-past the 512-token limit), so no single chunk carries the complete clause to ground against.
-This is a genuine, honestly-reported result — the deterministic validator doing its job — with
-a scoped chunking fix queued. Full 50-scenario RAGAS is gated on a paid backend (the free-tier
-RPM/burst limits are documented in `NOTES.md`).
+The earlier three-scenario BNS 303 failure is now fixed: sentence-aware repacking keeps the
+base-punishment clause together. The full run shows the remaining faithfulness and relevance
+work is broader than that single chunking defect. These are baseline numbers, not a claim of
+production legal accuracy. See [the complete RAGAS-50 record](docs/ragas-50-results.md).
 
 ### MCQ external comparability — BhashaBench-Legal criminal slice (Cerebras `gpt-oss-120b`)
 
@@ -134,8 +127,8 @@ other model's number (different model/sample would make the comparison dishonest
 
 ### Ablations
 
-Reranker on/off is quantified above. Hybrid vs dense/sparse and the full-agent-vs-baseline
-system run are the remaining ablations (see `NOTES.md` for status).
+Reranker on/off is quantified above. A dense-only or sparse-only comparison is still separate
+work; the RAGAS table is the full-agent baseline, not a retrieval ablation.
 
 ### A failure handled safely
 
@@ -162,8 +155,8 @@ API: `http://localhost:8000` · Frontend: `http://localhost:8501`
 ## Current limitations
 
 - Docker packaging is deferred.
-- The full 50-scenario RAGAS run is still pending; the published RAGAS values cover three
-  scenarios and are labeled as such above.
+- RAGAS-50 found low faithfulness and answer relevancy, so this remains a local demo rather
+  than a legal-advice service.
 
 ## Data & licensing
 

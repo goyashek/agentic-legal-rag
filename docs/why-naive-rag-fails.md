@@ -14,10 +14,10 @@ mapping exists. It avoids both embedding drift and an LLM call.
 Most questions are harder. “Someone took my bicycle without permission” does not name the
 legal term or section. The pipeline expands the narrative into offence-focused sub-queries,
 combines BM25 and dense retrieval with reciprocal-rank fusion, then reranks the candidates.
-That does not make retrieval perfect: on the 50-scenario set, reranking improved Recall@5 from
-0.550 to 0.653 while reducing MRR from 0.500 to 0.413. In legal retrieval, finding the full
-set of possibly relevant sections can matter more than making one result rank first, but the
-trade-off should be reported rather than hidden.
+That does not make retrieval perfect: on the rebuilt 50-scenario set, reranking improves
+Recall@5 from 0.527 to 0.630 while reducing MRR from 0.508 to 0.422. In legal retrieval,
+finding the full set of possibly relevant sections can matter more than making one result rank
+first, but the trade-off should be reported rather than hidden.
 
 ## A citation format is not citation validation
 
@@ -34,24 +34,26 @@ That check has a narrow but useful contract. It proves that the answer did not c
 that retrieval never supplied. It cannot prove that every sentence about a valid section is
 correct, which is why a separate grounding check follows it.
 
-## Refusing an answer can be the correct result
+## One fixed failure does not prove the system is ready
 
-The three-scenario RAGAS diagnostic exposed a concrete corpus problem. BNS section 303 is long
-enough that its base-punishment clause is separated from related material at a chunk boundary.
-When the generator tried to fill in the missing clause, the grounding check rejected the answer
-and the pipeline returned low confidence instead.
+An early three-scenario diagnostic exposed a concrete corpus problem. BNS section 303 was split
+into 18 fragments, with its base-punishment sentence cut at a chunk boundary. The grounding
+check correctly rejected an answer that tried to fill in the missing text.
 
-That produced a faithfulness score of 0.0 in that small diagnostic. It is not evidence that the
-system silently emitted a bad answer. It is evidence that the guardrail stopped one. The proper
-fix is to repair the chunking and re-index the corpus, not to weaken the check or invent a more
-flattering metric.
+I fixed the cause in the shared chunker rather than making a BNS-303 exception. It now joins
+semantic fragments into complete sentences before repacking them into the 512-token budget. BNS
+303 is four chunks, and the base-punishment sentence now stays in one of them.
+
+That repair matters, but it is not a victory lap. The complete RAGAS-50 run scores 0.262 for
+faithfulness and 0.419 for answer relevancy, even though context recall is 0.722. The project
+therefore has evidence of useful retrieval coverage and evidence that its answer path still
+needs work. That is exactly why the guardrails remain in place.
 
 ## What the current results do and do not show
 
-The project has a section-labelled 50-scenario retrieval set, a three-scenario RAGAS diagnostic,
-and a directional 60-question BhashaBench-Legal comparison. Those are useful signals, not a
-claim of production legal accuracy. The full RAGAS-50 run and a captured dense-versus-hybrid
-ablation are still pending.
+The project has a section-labelled 50-scenario retrieval set, a complete RAGAS-50 baseline, and
+a directional 60-question BhashaBench-Legal comparison. Those are useful signals, not a claim
+of production legal accuracy. A dense-only or sparse-only retrieval ablation is still pending.
 
 The takeaway is deliberately small: retrieval quality, citation validity, and claim grounding
 are separate problems. A system that treats them as one prompt is harder to audit when it fails.
