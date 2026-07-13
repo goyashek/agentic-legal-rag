@@ -124,6 +124,21 @@ class TestAggregate:
         assert ragas_eval.aggregate(rows).faithfulness == 0.0
 
 
+class TestLegacyEmbeddingAdapter:
+    def test_exposes_ragas_legacy_embedding_methods(self) -> None:
+        class ModernEmbeddings:
+            def embed_text(self, text: str) -> list[float]:
+                return [float(len(text))]
+
+            def embed_texts(self, texts: list[str]) -> list[list[float]]:
+                return [[float(len(text))] for text in texts]
+
+        embeddings = ragas_eval._LegacyEmbeddingAdapter(ModernEmbeddings())
+
+        assert embeddings.embed_query("law") == [3.0]
+        assert embeddings.embed_documents(["BNS", "BNSS"]) == [[3.0], [4.0]]
+
+
 # ============================ MCQ (BhashaBench) ==============================
 class TestScore:
     def test_all_correct(self) -> None:

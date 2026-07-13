@@ -41,6 +41,19 @@ METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision", "contex
 _RAGAS_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 
+class _LegacyEmbeddingAdapter:
+    """Expose RAGAS's current embedding provider through its legacy metric API."""
+
+    def __init__(self, embeddings) -> None:
+        self._embeddings = embeddings
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embeddings.embed_text(text)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._embeddings.embed_texts(texts)
+
+
 def _shim_dead_vertexai_import() -> None:
     """ragas 0.4.x hard-imports `langchain_community.chat_models.vertexai.ChatVertexAI`,
     a path langchain-community 0.4.x removed (sunset). `ChatVertexAI` is only used in an
@@ -77,7 +90,9 @@ def _ragas_evaluator():
     )
     return (
         LangchainLLMWrapper(judge),
-        HuggingFaceEmbeddings(model=os.getenv("RAGAS_EMBED_MODEL", _RAGAS_EMBED_MODEL)),
+        _LegacyEmbeddingAdapter(
+            HuggingFaceEmbeddings(model=os.getenv("RAGAS_EMBED_MODEL", _RAGAS_EMBED_MODEL))
+        ),
     )
 
 
