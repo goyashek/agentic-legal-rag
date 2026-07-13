@@ -11,6 +11,7 @@ production-accuracy claim.
 - RAGAS judge: DeepSeek V4 Flash, `temperature=0`, 256 completion-token ceiling.
 - Answer-relevancy embeddings: local `BAAI/bge-small-en-v1.5`.
 - Corpus: rebuilt 1,151-chunk local BNS / BNSS / BSA index after sentence-aware chunk repair.
+- Retrieval: hybrid RRF + cross-encoder reranker, which was the current agent configuration.
 - Scoring: RAGAS `strictness=1`, one serial worker. The completed run used the embedding
   compatibility repair in commit `40278d1`.
 
@@ -38,6 +39,10 @@ faithfulness and answer relevancy are low. The earlier BNS 303 split-clause prob
 but this run shows that the remaining grounding and answer-quality gaps are broader than that
 one section. These values are the reason the project is still a local demo, not a legal-advice
 service.
+
+A later local retrieval ablation found dense + reranker stronger than this hybrid setup, but it
+does not change the provenance of this RAGAS result. The live default stays hybrid until that
+candidate has its own end-to-end RAGAS run.
 
 The scorer completed all 200 metric jobs. An earlier incomplete attempt exposed an
 `embed_query` interface mismatch and was stopped rather than reported; no partial score from it

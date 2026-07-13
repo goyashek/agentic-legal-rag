@@ -82,13 +82,18 @@ exist in the corpus before it enters the set). Both rows use the rebuilt 1,151-c
 
 | config | P@5 | Recall@5 | MRR |
 |---|---|---|---|
-| hybrid only | 0.132 | 0.527 | **0.508** |
-| hybrid + reranker (default) | 0.164 | **0.630** | 0.422 |
+| BM25 only | 0.080 | 0.330 | 0.327 |
+| dense only | **0.200** | **0.750** | **0.706** |
+| hybrid RRF | 0.132 | 0.527 | 0.508 |
+| dense + reranker | 0.176 | 0.693 | 0.456 |
+| hybrid + reranker (current agent) | 0.164 | 0.630 | 0.422 |
 
-The reranker is a **recall-vs-rank trade, not a free win**: it adds 0.103 Recall@5 and 0.032
-P@5, but drops MRR by 0.086. It stays on by default because missing an applicable section is
-more costly here than losing a little peak rank. (P@5 is low by construction — most scenarios
-have 1–3 relevant sections, capping a perfect single-answer at 0.20.)
+The rebuilt corpus changes the original hybrid story: dense-only wins this retrieval-only set,
+and dense + reranker also beats the current hybrid + reranker row. I am **not** silently
+changing the agent default from that table alone: the complete RAGAS-50 baseline used hybrid +
+reranker, so switching the live graph needs a fresh end-to-end RAGAS run. (P@5 is low by
+construction — most scenarios have 1–3 relevant sections, capping a perfect single-answer at
+0.20.)
 
 ### RAGAS (real generative task — DeepSeek Flash judge / Flash control nodes / Pro generator)
 
@@ -127,8 +132,9 @@ other model's number (different model/sample would make the comparison dishonest
 
 ### Ablations
 
-Reranker on/off is quantified above. A dense-only or sparse-only comparison is still separate
-work; the RAGAS table is the full-agent baseline, not a retrieval ablation.
+All dense, sparse, hybrid, and reranked retrieval rows are quantified above. The RAGAS table is
+the full-agent baseline for the current hybrid + reranker configuration; dense + reranker is the
+measured candidate for its next end-to-end comparison.
 
 ### A failure handled safely
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from src.ingest.chunk_chonkie import LegalChunk
 from src.retrieval.index import BGE_QUERY_INSTRUCTION, tokenize
@@ -96,16 +97,22 @@ class HybridRetriever:
         ranked = sorted(zip(self.bm25_chunk_ids, scores, strict=True), key=lambda kv: -kv[1])
         return ranked[:limit]
 
-    def retrieve(self, query: str, *, top_k: int = 20) -> list[RetrievedChunk]:
-        """Dense + sparse search, RRF-fused, top_k returned (before reranking).
+    def retrieve(
+        self, query: str, *, top_k: int = 20, mode: Literal["hybrid", "dense", "sparse"] = "hybrid"
+    ) -> list[RetrievedChunk]:
+        """Return a hybrid, dense-only, or sparse-only ranking before reranking.
 
-        Score fields get filled in so the ablation has something to work with. We
-        over-fetch each arm (2*top_k) before fusing so a chunk strong in one signal
-        isn't lost just because it's weak in the other.
+        The default hybrid mode over-fetches each arm before RRF so a chunk strong
+        in one signal is not lost. Dense and sparse modes exist for the retrieval
+        ablation and keep the same chunk/payload path as the production retriever.
         """
+        if mode not in {"hybrid", "dense", "sparse"}:
+            raise ValueError("mode must be 'hybrid', 'dense', or 'sparse'")
+
         pool = max(top_k * 2, 40)
-        dense = self._dense_search(query, pool)
-        sparse = self._sparse_search(query, pool)
+        limit = pool if mode == "hybrid" else top_k
+        dense = [] if mode == "sparse" else self._dense_search(query, limit)
+        sparse = [] if mode == "dense" else self._sparse_search(query, limit)
 
         dense_ids = [cid for cid, _ in dense]
         sparse_ids = [cid for cid, _ in sparse]
@@ -114,23 +121,28 @@ class HybridRetriever:
         dense_rank = {cid: r for r, cid in enumerate(dense_ids)}
         sparse_rank = {cid: r for r, cid in enumerate(sparse_ids)}
 
-        fused = reciprocal_rank_fusion(dense_ids, sparse_ids, k=self.rrf_k)[:top_k]
+        if mode == "hybrid":
+            ranking = reciprocal_rank_fusion(dense_ids, sparse_ids, k=self.rrf_k)[:top_k]
+        elif mode == "dense":
+            ranking = dense
+        else:
+            ranking = sparse
 
         # Pull payloads for the winners in one Qdrant call.
         from qdrant_client import models
 
-        winner_ids = [cid for cid, _ in fused]
+        winner_ids = [cid for cid, _ in ranking]
         payloads = self._payloads_for(winner_ids, models)
 
         results: list[RetrievedChunk] = []
-        for cid, rrf in fused:
+        for cid, score in ranking:
             payload = payloads.get(cid)
             if payload is None:
                 continue
             results.append(
                 RetrievedChunk(
                     chunk=_chunk_from_payload(payload),
-                    rrf_score=rrf,
+                    rrf_score=score,
                     dense_score=dense_score.get(cid),
                     sparse_score=sparse_score.get(cid),
                     dense_rank=dense_rank.get(cid),

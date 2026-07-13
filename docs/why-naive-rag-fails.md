@@ -14,10 +14,11 @@ mapping exists. It avoids both embedding drift and an LLM call.
 Most questions are harder. “Someone took my bicycle without permission” does not name the
 legal term or section. The pipeline expands the narrative into offence-focused sub-queries,
 combines BM25 and dense retrieval with reciprocal-rank fusion, then reranks the candidates.
-That does not make retrieval perfect: on the rebuilt 50-scenario set, reranking improves
-Recall@5 from 0.527 to 0.630 while reducing MRR from 0.508 to 0.422. In legal retrieval,
-finding the full set of possibly relevant sections can matter more than making one result rank
-first, but the trade-off should be reported rather than hidden.
+That does not make retrieval perfect. On the rebuilt 50-scenario set, BM25 alone reaches only
+0.330 Recall@5. Dense-only reaches 0.750 Recall@5 and 0.706 MRR; the current hybrid + reranker
+agent reaches 0.630 and 0.422. That is an unexpected result worth recording, not hiding. Dense
++ reranker is the next end-to-end candidate, but the published RAGAS baseline remains attached
+to the currently configured hybrid agent until that candidate is rerun through the full graph.
 
 ## A citation format is not citation validation
 
@@ -53,7 +54,8 @@ needs work. That is exactly why the guardrails remain in place.
 
 The project has a section-labelled 50-scenario retrieval set, a complete RAGAS-50 baseline, and
 a directional 60-question BhashaBench-Legal comparison. Those are useful signals, not a claim
-of production legal accuracy. A dense-only or sparse-only retrieval ablation is still pending.
+of production legal accuracy. Dense, sparse, hybrid, and reranked retrieval paths are all
+captured; a fresh end-to-end run for the dense candidate is still pending.
 
 The takeaway is deliberately small: retrieval quality, citation validity, and claim grounding
 are separate problems. A system that treats them as one prompt is harder to audit when it fails.

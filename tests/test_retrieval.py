@@ -123,6 +123,16 @@ class TestHybridRetrieverIntegration:
     def test_results_capped_at_top_k(self, retriever) -> None:
         assert len(retriever.retrieve("criminal breach of trust", top_k=5)) <= 5
 
+    @pytest.mark.parametrize("mode", ["dense", "sparse"])
+    def test_single_signal_modes_return_ranked_chunks(self, retriever, mode: str) -> None:
+        results = retriever.retrieve("what is the punishment for murder", top_k=5, mode=mode)
+
+        assert 1 <= len(results) <= 5
+        if mode == "dense":
+            assert all(r.dense_rank is not None and r.sparse_rank is None for r in results)
+        else:
+            assert all(r.sparse_rank is not None and r.dense_rank is None for r in results)
+
 
 @pytest.mark.skipif(
     not (QDRANT_DIR.exists() and BM25_PKL.exists()),
