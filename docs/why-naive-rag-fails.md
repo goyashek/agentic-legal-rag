@@ -15,10 +15,9 @@ Most questions are harder. “Someone took my bicycle without permission” does
 legal term or section. The pipeline expands the narrative into offence-focused sub-queries,
 combines BM25 and dense retrieval with reciprocal-rank fusion, then reranks the candidates.
 That does not make retrieval perfect. On the rebuilt 50-scenario set, BM25 alone reaches only
-0.330 Recall@5. Dense-only reaches 0.750 Recall@5 and 0.706 MRR; the current hybrid + reranker
-agent reaches 0.630 and 0.422. A fresh full-graph RAGAS run now also favors dense without a
-reranker for answer relevancy and context recall. The next comparison isolates the grader,
-checker, and rewrite loop before changing the live graph.
+0.330 Recall@5. Dense-only reaches 0.750 Recall@5 and 0.706 MRR; the older hybrid + reranker
+agent reached 0.630 and 0.422. Dense without a reranker won that retrieval comparison and is now
+the live path.
 
 ## A citation format is not citation validation
 
@@ -45,10 +44,15 @@ I fixed the cause in the shared chunker rather than making a BNS-303 exception. 
 semantic fragments into complete sentences before repacking them into the 512-token budget. BNS
 303 is four chunks, and the base-punishment sentence now stays in one of them.
 
-That repair matters, but it does not make the answer path ready. The fresh dense RAGAS-50 run
-scores 0.309 for faithfulness and 0.518 for answer relevancy, even though context recall is
-0.840. The fresh hybrid run is 0.314, 0.386, and 0.732 respectively. Retrieval coverage is
-better than final answer quality, so the project still needs an ablation of its guardrails.
+That repair matters, but it does not by itself make the answer path ready. The guardrail
+ablation has since been run. The current production path (dense retrieval, generation, and
+deterministic citation validation, without the checker or rewrite loop) scores 0.517 for
+faithfulness and 0.749 for answer relevancy over the 50 scenarios, with context recall at 0.919.
+The older full self-correcting graph scored 0.309 and 0.518 on the same set: its checker kept
+rejecting citation-valid answers and the rewrite loop could not recover them, so 13 to 20
+scenarios ended in a canned low-confidence reply that scores as zero. Removing those two stages
+nearly doubled faithfulness and answer relevancy. Faithfulness at 0.517 is still middling, so the
+answer path is better but not production-grade.
 
 ## What the current results do and do not show
 

@@ -17,15 +17,46 @@ same current full graph. They are diagnostics, not production-accuracy claims.
 
 ## Overall scores
 
-| retrieval used by the full graph | faithfulness | answer relevancy | context precision | context recall |
-|---|---:|---:|---:|---:|
-| dense, no reranker | 0.309 | **0.518** | 0.700 | **0.840** |
-| hybrid RRF + reranker (current default) | **0.314** | 0.386 | **0.709** | 0.732 |
+The first two rows are the older full-graph runs (router + expander + grader +
+checker + rewrite loop). The third row is the **current live production path**
+(dense retrieval, no reranker, generate, deterministic citation validation, and
+the scope/OOD controls — no grader, checker, or rewrite loop). All three use the
+same 1,151-chunk corpus and the same 50 scenarios.
 
-Dense is the next candidate. Its faithfulness is effectively tied with hybrid,
-while answer relevancy is higher by 0.132 and context recall is higher by 0.108.
-Hybrid's gains are 0.005 in faithfulness and 0.010 in context precision. Those
-small gains do not yet justify keeping its extra retrieval stages.
+| pipeline / retrieval | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| full graph, dense, no reranker | 0.309 | 0.518 | 0.700 | 0.840 |
+| full graph, hybrid RRF + reranker | 0.314 | 0.386 | **0.709** | 0.732 |
+| **production, dense, no reranker** | **0.517** | **0.749** | 0.615 | **0.919** |
+
+The production path is the decisive result. Dropping the checker and rewrite loop
+nearly doubles faithfulness (0.309 → 0.517) and answer relevancy (0.518 → 0.749),
+and lifts context recall to 0.919. Context precision dips (0.700 → 0.615), which
+is consistent with the wider 12-chunk answer window feeding more context in. The
+20-case node ablation and the ten-answer statute audit both predicted that the
+simple path would beat the full graph on answer quality; this full 50-scenario
+run on the actual production pipeline confirms it. Faithfulness at 0.517 is still
+middling, so this stays a local demo, but the "coverage is better than the final
+answers" gap the earlier full-graph runs showed is largely closed.
+
+Provenance: judge and control nodes on `deepseek-v4-flash`, answers on
+`deepseek-v4-pro`, thinking disabled. Every one of the 50 production scenarios
+returned a generated answer; none fell back to the canned low-confidence reply,
+unlike the full-graph runs where the checker-to-rewriter loop ended 13–20
+scenarios in low confidence.
+
+### Production run difficulty slices
+
+| difficulty | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| easy | 0.423 | 0.749 | 0.632 | 0.982 |
+| medium | 0.550 | 0.748 | 0.570 | 0.941 |
+| hard | 0.661 | 0.754 | 0.726 | 0.670 |
+
+Answer relevancy is flat across difficulty. Faithfulness is actually highest on
+the seven hard scenarios and lowest on the easy ones — the easy tier is where the
+generator most often overreaches slightly beyond the retrieved text. The hard
+tier's context recall (0.670) is the weakest retrieval spot, as before.
 
 ## Difficulty slices
 

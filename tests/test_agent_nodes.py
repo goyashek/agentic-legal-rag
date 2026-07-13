@@ -209,6 +209,31 @@ class TestLookupSection:
         assert answer.answer.endswith("first second")
         assert answer.citations[0].section_id == "303"
 
+    def test_fast_path_surfaces_enriched_classification(self) -> None:
+        # cognizable/bailable/category are already on the chunk (enrich_metadata);
+        # the deterministic answer should report them, no LLM.
+        chunk = LegalChunk(
+            "BNS::103::0", "BNS", "103", "Punishment for murder", "body",
+            metadata={
+                "cognizable": True,
+                "bailable": False,
+                "offence_category": "Of Offences Affecting The Human Body",
+            },
+        )
+        answer = build_fast_path_answer("BNS 103", [chunk])
+        assert "cognizable" in answer.answer
+        assert "non-bailable" in answer.answer
+        assert "Of Offences Affecting The Human Body" in answer.answer
+
+    def test_fast_path_stays_silent_on_unknown_flags(self) -> None:
+        # None flags mean enrich_metadata refused to guess — never assert one.
+        chunk = LegalChunk(
+            "BNS::999::0", "BNS", "999", "Some section", "body",
+            metadata={"cognizable": None, "bailable": None},
+        )
+        answer = build_fast_path_answer("BNS 999", [chunk])
+        assert "Classification" not in answer.answer
+
 
 class TestOutOfDomainGate:
     def test_empty_retrieval_is_ood(self) -> None:

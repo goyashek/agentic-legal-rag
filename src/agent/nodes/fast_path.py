@@ -104,13 +104,41 @@ def lookup_section_chunks(act: str, section_id: str, chunks: list[LegalChunk]) -
     )
 
 
+def _classification_line(chunk: LegalChunk) -> str:
+    """One deterministic line from the enriched metadata already on the chunk.
+
+    cognizable/bailable are True/False/None (None = the BNSS First Schedule was
+    conditional or conflicting, so enrich_metadata refused to guess — we stay
+    silent rather than assert a flag we don't know). offence_category is the BNS
+    chapter title. Pure lookup, no LLM: the audit flagged these fields as enriched
+    but never surfaced; the exact-section path already holds the right chunk.
+    """
+    meta = chunk.metadata
+    parts: list[str] = []
+    if meta.get("cognizable") is not None:
+        parts.append("cognizable" if meta["cognizable"] else "non-cognizable")
+    if meta.get("bailable") is not None:
+        parts.append("bailable" if meta["bailable"] else "non-bailable")
+    line = ""
+    if parts:
+        line = f"Classification: {', '.join(parts)}."
+    category = meta.get("offence_category")
+    if category:
+        line = f"{line} Category: {category}.".strip()
+    return line
+
+
 def build_fast_path_answer(query: str, chunks: list[LegalChunk]) -> LegalAdvice:
     """Assemble a direct, complete-section answer without an LLM call."""
     first = chunks[0]
     bodies = [c.text.removeprefix(f"{c.summary}\n\n") if c.summary else c.text for c in chunks]
+    answer = f"{first.act} Section {first.section_id} — {first.heading}.\n\n{' '.join(bodies)}"
+    classification = _classification_line(first)
+    if classification:
+        answer = f"{answer}\n\n{classification}"
     return LegalAdvice(
         query=query,
-        answer=f"{first.act} Section {first.section_id} — {first.heading}.\n\n{' '.join(bodies)}",
+        answer=answer,
         citations=[Citation(act=first.act, section_id=first.section_id, heading=first.heading)],
         offences_identified=[first.heading],
         confidence="high",
