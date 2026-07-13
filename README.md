@@ -182,6 +182,10 @@ API: `http://localhost:8000` · Frontend: `http://localhost:8501`
 
 See `NOTES.md` for the annotated tree and the coding rules.
 
+## Further reading
+
+- [Why naive RAG fails on Indian criminal-law text](docs/why-naive-rag-fails.md)
+
 ## License
 
 MIT (code). Eval datasets retain their own licenses (see above).
