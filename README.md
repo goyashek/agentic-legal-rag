@@ -1,41 +1,72 @@
 # ⚖️ Agentic Legal RAG: Indian Criminal Law (BNS / BNSS / BSA)
 
-> An agentic, self-correcting RAG system for Indian criminal law. Hybrid retrieval, a deterministic citation validator (the anti-hallucination step most systems skip), and dual evaluation (RAGAS diagnostics on the real task plus a BhashaBench-Legal external-comparability number), with observability and an eval gate in CI.
+> An agentic, self-correcting RAG system for Indian criminal law. Hybrid retrieval, a deterministic citation validator (the anti-hallucination step most systems skip), and dual evaluation (RAGAS diagnostics on the real task plus a BhashaBench-Legal external-comparability number), with a small lint-and-test CI check.
 
 > ⚠️ Statutory information, not legal advice. Not a substitute for a lawyer.
 
-> 🚧 **Status:** agent pipeline complete end-to-end (12 nodes, self-correction loop); ingestion, hybrid retrieval, and both eval harnesses live with first real numbers (see Evaluation). Week 4 (API / UI / Docker quickstart) in progress. See `NOTES.md` for locked decisions and `PROJECT.md` for the build plan.
+> 🚧 **Status:** the 12-node pipeline, API, and Streamlit client are complete. Docker packaging is deliberately deferred; see Local setup for the currently supported path. See `NOTES.md` for locked decisions and `PROJECT.md` for the build plan.
 
 ---
 
 ## Why this exists
 
-Indian legal RAG is a crowded niche (LexGrid, NYAYA.ai, Legal Assist AI, BNS Mitra, and others). What I didn't see any of them combine is the full stack together: genuinely agentic self-correction, hybrid retrieval, deterministic citation validation, rigorous dual evaluation, and governance from the start. Getting that convergence into one system is the point here.
+Indian legal RAG is a crowded niche (LexGrid, NYAYA.ai, Legal Assist AI, BNS Mitra, and others). What I didn't see combined in one project was the full stack: agentic self-correction, hybrid retrieval, deterministic citation validation, and dual evaluation. Getting that convergence into one system is the point here.
 
-The 2023 to 2024 IPC/BNS transition also created a live pain point: generalist LLMs still cite *repealed* IPC sections. This system owns the IPC to BNS mapping and answers in the new code.
+The 2023 to 2024 IPC/BNS transition also created a live pain point: generalist LLMs still cite *repealed* IPC sections. This system carries an IPC-to-BNS mapping and answers in the new code.
 
 ## Architecture
 
-_TODO: architecture diagram (mirror the node flow in `NOTES.md`)._
-
+```mermaid
+flowchart TD
+    Q[Query] --> F{Exact act + section?}
+    F -->|yes| A1[Direct cited answer]
+    F -->|no| R{Criminal-law query?}
+    R -->|no / unclear| A2[Scope or clarification response]
+    R -->|criminal| E[Intent expansion]
+    E --> H[Hybrid retrieval: BM25 + dense + RRF]
+    H --> X[Cross-encoder reranker]
+    X --> O{In corpus?}
+    O -->|no| A3[Low-confidence corpus response]
+    O -->|yes| G{At least 3 relevant chunks?}
+    G -->|yes| N[Generate cited answer]
+    G -->|no, budget left| W[Rewrite query]
+    W --> H
+    N --> C{Citations are in retrieved chunks?}
+    C -->|yes| K{Claims grounded in sources?}
+    C -->|no, budget left| W
+    K -->|yes| A4[LegalAdvice]
+    K -->|no, budget left| W
+    G -->|no, budget spent| A5[Low-confidence response]
+    C -->|no, budget spent| A5
+    K -->|no, budget spent| A5
 ```
-Query -> Fast Path -> Router -> Intent Expander -> Hybrid Retrieve (BM25+dense+RRF)
-      -> Rerank -> OOD Gate -> Grader -> Generator -> Citation Validator -> Checker -> Answer
-```
 
-Self-correction loop budget = 2.
+The graph allows at most two rewrite-and-retrieve iterations. It returns a low-confidence
+response rather than continuing indefinitely.
 
 ## Key features
 
 - **Deterministic citation validator:** every cited `[Section, Act]` is verified to exist in the retrieved set (pure code, not an LLM). This is the part I think sets it apart, and it's what drives the self-correction loop.
-- **Exact-section fast path:** `"BNS 103"` / `"302 IPC"` resolve via direct metadata lookup in <50ms, IPC refs bridged to BNS.
+- **Exact-section fast path:** `"BNS 103"` / `"302 IPC"` resolve via direct metadata lookup, with IPC references bridged to BNS.
 - **Hybrid retrieval:** BM25 + dense + RRF (k=60), cross-encoder reranker on by default.
 - **Intent expansion:** one messy narrative into parallel offence sub-queries (cross-sectional reasoning).
-- **Auditable by design:** every answer carries citations + a LangSmith trace URL.
+- **Auditable by design:** answers carry structured citations and can include a LangSmith trace URL when tracing is configured.
 
 ## Competitor comparison
 
-_TODO: comparison table (from `analysis.md` §2)._
+The comparison below summarizes the systems reviewed during project scoping. Reported
+metrics use each project's own setup, so they are context rather than a leaderboard.
+
+| System | Retrieval and agent loop | Grounding check | Reported evaluation |
+|---|---|---|---|
+| **This project** | BM25 + dense RRF, reranking, and a LangGraph rewrite loop | Deterministic cited-section membership check, then claim grounding check | 50-scenario retrieval set; 3-scenario RAGAS diagnostic; 60-question BhashaBench-Legal sample |
+| **LexGrid** | Hybrid ANN + full-text RRF, reranking, exact-section bypass; single-shot | Citation format and distance threshold | 12-case suite: MRR 0.833, Recall@5 0.814, P@5 0.233, legal accuracy 0.703 |
+| **Legal Assist AI** | Dense FAISS retrieval with a prompt-based guardrail; single-shot | “I don't know” guardrail | AIBE 60.08%; BERTScore 76.9% |
+| **Indian Criminal Law RAG Agent** | Dense top-5 retrieval with a three-agent CrewAI loop | LLM grounding assessment | 20-query human evaluation: 85–90% top-5 relevance, 92% grounding |
+
+The intended difference is not that any single component is novel. It is the combination of
+hybrid retrieval, bounded self-correction, deterministic citation validation, and reported
+failure cases.
 
 ## Evaluation
 
@@ -106,18 +137,35 @@ other model's number (different model/sample would make the comparison dishonest
 Reranker on/off is quantified above. Hybrid vs dense/sparse and the full-agent-vs-baseline
 system run are the remaining ablations (see `NOTES.md` for status).
 
-## Quickstart
+### A failure handled safely
 
-_TODO: verify once implemented._
+The citation validator has a deterministic regression test for a high-risk failure: an answer
+citing BNS 307 when only BNS 306 was retrieved is rejected before it can be returned. The graph
+then rewrites and retrieves again, or returns low confidence once the two-attempt budget is used.
+
+## Local setup
+
+Docker packaging is deferred. The API and frontend run locally once the private, git-ignored
+corpus artifacts already exist under `data/processed/` (`sections.jsonl`, `bm25.pkl`, and the
+embedded Qdrant store). The repository does not yet expose index creation as a supported CLI.
 
 ```bash
 cp .env.example .env        # fill in DEEPSEEK_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
-pip install -e ".[dev]"     # or: uv sync
-# 1. add BNS/BNSS/BSA PDFs to data/raw/  (see Data & licensing)
-# 2. build the index:  python -m src.retrieval.index
-# 3. run the stack:     docker compose up --build   # qdrant + api + frontend
+uv sync --all-extras
+uv run uvicorn src.api.main:app --reload
+# in another terminal:
+uv run streamlit run frontend/app.py
 ```
-API -> `http://localhost:8000` · Frontend -> `http://localhost:8501`
+
+API: `http://localhost:8000` · Frontend: `http://localhost:8501`
+
+## Current limitations
+
+- Docker and a one-command index build are deferred.
+- BNS section 303 currently spans a chunk boundary; the grounding checker safely refuses an
+  answer that needs the missing clause. The chunking repair and re-index are pending.
+- The full 50-scenario RAGAS run is still pending; the published RAGAS values cover three
+  scenarios and are labeled as such above.
 
 ## Data & licensing
 
@@ -127,7 +175,7 @@ API -> `http://localhost:8000` · Frontend -> `http://localhost:8501`
 
 ## Governance & security
 
-- **Auditable by design:** structured citations + LangSmith trace per answer.
+- **Auditable by design:** structured citations, with LangSmith trace links when tracing is configured.
 - ⚠️ **No auth on the API.** Fine for a local demo, but it must sit behind an API key/gateway before any public/cloud deploy.
 
 ## Project layout
