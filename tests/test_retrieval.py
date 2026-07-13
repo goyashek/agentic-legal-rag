@@ -100,7 +100,9 @@ class TestHybridRetrieverIntegration:
     def retriever(cls):
         from src.retrieval.hybrid import HybridRetriever
 
-        return HybridRetriever(collection="legal", bm25_path=str(BM25_PKL))
+        r = HybridRetriever(collection="legal", bm25_path=str(BM25_PKL))
+        yield r
+        r.client.close()
 
     def test_retrieve_returns_scored_chunks(self, retriever) -> None:
         results = retriever.retrieve("someone was murdered", top_k=10)
@@ -168,14 +170,17 @@ class TestRerankerIntegration:
         from src.retrieval.rerank import Reranker
 
         retriever = HybridRetriever(collection="legal", bm25_path=str(BM25_PKL))
-        candidates = retriever.retrieve("punishment for murder", top_k=20)
-        reranked = Reranker().rerank("punishment for murder", candidates, top_k=8)
+        try:
+            candidates = retriever.retrieve("punishment for murder", top_k=20)
+            reranked = Reranker().rerank("punishment for murder", candidates, top_k=8)
 
-        assert len(reranked) <= 8
-        assert all(r.rerank_score is not None for r in reranked)
-        # sorted by rerank score desc
-        scores = [r.rerank_score for r in reranked]
-        assert scores == sorted(scores, reverse=True)
+            assert len(reranked) <= 8
+            assert all(r.rerank_score is not None for r in reranked)
+            # sorted by rerank score desc
+            scores = [r.rerank_score for r in reranked]
+            assert scores == sorted(scores, reverse=True)
+        finally:
+            retriever.client.close()
 
     def test_rerank_empty_candidates(self) -> None:
         from src.retrieval.rerank import Reranker
