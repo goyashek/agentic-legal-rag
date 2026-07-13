@@ -1,6 +1,6 @@
-"""Wires the nodes into the self-correcting flow.
+"""Wires the production and experimental graph variants.
 
-Flow I settled on (target — built incrementally across Week 2):
+The live path is intentionally short:
 
     fast_path (hit) ......................................► END
         │ miss
@@ -8,32 +8,18 @@ Flow I settled on (target — built incrementally across Week 2):
     router (out_of_scope / needs_clarification) ..► END (canned answer)
         │ criminal
         ▼
-    intent_expander → retrieve → ood_gate (ood) ..► END ("not in corpus")
-        │ in-domain
+    dense retrieve → ood_gate (ood) .............► END ("not in corpus")
+        │ in-corpus
         ▼
-    grader (no relevant chunk) → rewriter (within budget) → retrieve
-        │ relevant chunk             (budget hit) → END (confidence=low)
-        ▼
-    generator → citation_validator (invalid) → rewriter (loop)
+    generator → citation_validator (invalid) → low-confidence response
         │ valid
-        ▼
-    checker (unfaithful) → rewriter (loop)
-        │ faithful
         ▼
        END
 
-The loop budget (RETRIEVAL_LOOP_BUDGET = 2) lives in the conditional edges out of
-grader / citation_validator / checker. All three route back through the rewriter,
-which bumps `iteration`. Once it goes past the budget the graph ends with
-confidence="low" instead of spinning forever.
-
-Build status: COMPLETE (Week 2 close). The full flow above is wired end to end —
-fast_path → router → intent_expander → retrieve → ood_gate → grader → generator →
-citation_validator → checker → END, with the grader / validator / checker all
-looping back through the rewriter (→ retrieve) within RETRIEVAL_LOOP_BUDGET, then
-falling to low_confidence when the budget is spent. Routing decisions are pure
-functions, unit-testable without a key or the index; node LLM clients are
-injectable so logic tests run with fakes at zero quota.
+The older full graph keeps the expander, grader, checker, and rewrite loop for
+evaluation. It is not the API default because the fixed 20-case ablation and a
+manual statute audit found that those nodes often turned citation-valid answers
+into generic low-confidence replies.
 """
 
 from __future__ import annotations
@@ -47,7 +33,7 @@ from src.retrieval.hybrid import RetrievedChunk
 
 RETRIEVAL_LOOP_BUDGET = 2
 RetrievalMode = Literal["hybrid", "dense", "sparse"]
-PipelineVariant = Literal["baseline", "grader", "checker", "full"]
+PipelineVariant = Literal["production", "baseline", "grader", "checker", "full"]
 
 # Retrieval knobs (mirror the baseline: 20 fused candidates -> rerank to 8).
 RETRIEVE_K = 20
@@ -74,11 +60,21 @@ def route_after_router(state: AgentState) -> str:
     return END
 
 
+def route_after_router_to_retrieve(state: AgentState) -> str:
+    """Production route: keep scope control but skip intent expansion."""
+    return "retrieve" if state.get("route") == "criminal" else END
+
+
 def route_after_ood_gate(state: AgentState) -> str:
     """out-of-domain -> canned 'not in corpus' answer; in-corpus -> grade the chunks."""
     if state.get("ood"):
         return "not_in_corpus"
     return "grader"
+
+
+def route_after_ood_gate_to_generator(state: AgentState) -> str:
+    """Production route: generate after the in-corpus check without grading."""
+    return "not_in_corpus" if state.get("ood") else "generator"
 
 
 def route_after_grader(state: AgentState) -> str:
@@ -278,7 +274,7 @@ def low_confidence_node(state: AgentState) -> AgentState:
         confidence="low",
         in_corpus=True,
     )
-    return {"answer": answer, "trace_notes": [*notes, "low_confidence: loop budget spent"]}
+    return {"answer": answer, "trace_notes": [*notes, "low_confidence: terminal"]}
 
 
 # --- graph assembly ----------------------------------------------------------
@@ -286,18 +282,18 @@ def low_confidence_node(state: AgentState) -> AgentState:
 
 def build_graph(
     *,
-    retrieval_mode: RetrievalMode = "hybrid",
-    use_reranker: bool = True,
-    pipeline: PipelineVariant = "full",
+    retrieval_mode: RetrievalMode = "dense",
+    use_reranker: bool = False,
+    pipeline: PipelineVariant = "production",
 ):
-    """Construct the production graph or one fixed ablation variant.
+    """Construct the live graph, a fixed ablation, or the legacy full graph.
 
-    The three ablations deliberately skip the router, expander, OOD gate, and
-    rewriter. That leaves each downstream stage with one job to earn in the
-    RAGAS comparison: bare retrieval, then grading, then checking.
+    The three ablations skip entry controls so each downstream stage has one job
+    to earn in the RAGAS comparison. The full graph remains available to reproduce
+    the earlier experiment.
     """
-    if pipeline not in {"baseline", "grader", "checker", "full"}:
-        raise ValueError("pipeline must be baseline, grader, checker, or full")
+    if pipeline not in {"production", "baseline", "grader", "checker", "full"}:
+        raise ValueError("pipeline must be production, baseline, grader, checker, or full")
     from src.agent.nodes.checker import checker_node
     from src.agent.nodes.citation_validator import citation_validator_node
     from src.agent.nodes.fast_path import fast_path_node
@@ -316,6 +312,27 @@ def build_graph(
     builder.add_node("generator", generator_node)
     builder.add_node("citation_validator", citation_validator_node)
     builder.add_node("low_confidence", low_confidence_node)
+
+    if pipeline == "production":
+        builder.add_node("fast_path", fast_path_node)
+        builder.add_node("router", router_node)
+        builder.add_node("ood_gate", ood_gate_node)
+        builder.add_node("not_in_corpus", not_in_corpus_node)
+
+        builder.add_edge(START, "fast_path")
+        builder.add_conditional_edges("fast_path", route_after_fast_path, ["router", END])
+        builder.add_conditional_edges("router", route_after_router_to_retrieve, ["retrieve", END])
+        builder.add_edge("retrieve", "ood_gate")
+        builder.add_conditional_edges(
+            "ood_gate", route_after_ood_gate_to_generator, ["not_in_corpus", "generator"]
+        )
+        builder.add_edge("generator", "citation_validator")
+        builder.add_conditional_edges(
+            "citation_validator", route_after_citation_validator_once, [END, "low_confidence"]
+        )
+        builder.add_edge("not_in_corpus", END)
+        builder.add_edge("low_confidence", END)
+        return builder.compile()
 
     if pipeline != "full":
         builder.add_edge(START, "retrieve")
@@ -387,18 +404,18 @@ _GRAPH = None
 def answer_query(
     query: str,
     *,
-    retrieval_mode: RetrievalMode = "hybrid",
-    use_reranker: bool = True,
-    pipeline: PipelineVariant = "full",
+    retrieval_mode: RetrievalMode = "dense",
+    use_reranker: bool = False,
+    pipeline: PipelineVariant = "production",
 ) -> AgentState:
-    """Build the graph (cached) and run one query. Returns the final state."""
+    """Run the cached production graph or an explicitly selected experiment."""
     global _GRAPH
-    if pipeline != "full" or retrieval_mode != "hybrid" or not use_reranker:
+    if pipeline != "production" or retrieval_mode != "dense" or use_reranker:
         return build_graph(
             retrieval_mode=retrieval_mode,
             use_reranker=use_reranker,
             pipeline=pipeline,
         ).invoke({"query": query, "trace_notes": [], "iteration": 0})
     if _GRAPH is None:
-        _GRAPH = build_graph()
+        _GRAPH = build_graph(retrieval_mode="dense", use_reranker=False, pipeline="production")
     return _GRAPH.invoke({"query": query, "trace_notes": [], "iteration": 0})

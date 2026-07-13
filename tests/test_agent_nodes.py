@@ -453,6 +453,18 @@ class TestGeneratorUnit:
         assert "BNS Section 103" in content
         assert "BNS Section 318" in content
 
+    def test_punishment_instruction_preserves_bounds_and_fine(self) -> None:
+        fake = _FakeGeneratorClient(self._canned())
+        wallet = _chunk("314")
+        wallet.chunk.text = (
+            "shall not be less than six months but may extend to two years and with fine"
+        )
+        generate_answer("I kept a lost wallet", [wallet], client=fake)
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "not be less than six months" in content
+        assert "fine is mandatory or optional" in content
+        assert "exactly from the cited text" in content
+
     def test_node_prefers_relevant_chunks_over_retrieved(self) -> None:
         fake = _FakeGeneratorClient(self._canned())
         state = {

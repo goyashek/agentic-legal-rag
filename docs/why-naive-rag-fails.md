@@ -58,7 +58,8 @@ of production legal accuracy. Dense, sparse, hybrid, and reranked retrieval path
 On a fixed random 20-scenario RAGAS ablation, dense retrieval plus generation and deterministic
 citation validation scored better for faithfulness and relevancy than the fuller graph. The
 grader improved context metrics, while the checker and rewrite loop did not improve final answer
-quality. A ten-answer statute audit is the next step before changing the live default.
+quality. A ten-answer statute audit agreed, so the live in-corpus path now uses dense retrieval,
+generation, and deterministic citation validation while keeping the scope controls.
 
 The takeaway is deliberately small: retrieval quality, citation validity, and claim grounding
 are separate problems. A system that treats them as one prompt is harder to audit when it fails.

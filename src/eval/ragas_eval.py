@@ -347,7 +347,9 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper
     parser.add_argument("--mode", choices=("hybrid", "dense", "sparse"), default="hybrid")
     parser.add_argument("--no-rerank", action="store_true")
     parser.add_argument(
-        "--pipeline", choices=("baseline", "grader", "checker", "full"), default="full"
+        "--pipeline",
+        choices=("production", "baseline", "grader", "checker", "full"),
+        default="full",
     )
     parser.add_argument("--samples-out", type=Path)
     parser.add_argument("--scores-out", type=Path)

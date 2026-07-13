@@ -32,7 +32,9 @@ from src.agent.graph import (
     route_after_grader,
     route_after_grader_once,
     route_after_ood_gate,
+    route_after_ood_gate_to_generator,
     route_after_router,
+    route_after_router_to_retrieve,
 )
 from src.agent.llm import has_api_key
 from src.agent.nodes.citation_validator import validate_citations
@@ -99,6 +101,14 @@ class TestRoutingFunctions:
 
     def test_in_corpus_goes_to_grader(self) -> None:
         assert route_after_ood_gate({"ood": False}) == "grader"
+
+    def test_production_in_corpus_goes_to_generator(self) -> None:
+        assert route_after_ood_gate_to_generator({"ood": False}) == "generator"
+        assert route_after_ood_gate_to_generator({"ood": True}) == "not_in_corpus"
+
+    def test_production_router_skips_expansion(self) -> None:
+        assert route_after_router_to_retrieve({"route": "criminal"}) == "retrieve"
+        assert route_after_router_to_retrieve({"route": "out_of_scope"}) == END
 
     def test_grade_pass_goes_to_generator(self) -> None:
         assert route_after_grader({"grade_pass": True}) == "generator"
@@ -213,6 +223,11 @@ class TestGraphCompiles:
     @pytest.mark.parametrize(
         ("pipeline", "expected_nodes", "absent_nodes"),
         [
+            (
+                "production",
+                {"fast_path", "router", "retrieve", "ood_gate", "generator", "citation_validator"},
+                {"intent_expander", "grader", "checker", "rewriter"},
+            ),
             ("baseline", {"retrieve", "generator", "citation_validator"}, {"grader", "checker"}),
             ("grader", {"retrieve", "grader", "generator", "citation_validator"}, {"checker"}),
             (
@@ -266,7 +281,7 @@ class TestRouterEndToEnd:
     reason="needs both the built Qdrant index and DEEPSEEK_API_KEY",
 )
 class TestCriminalBranchEndToEnd:
-    """Full criminal path: router -> intent_expander -> retrieve -> ood_gate."""
+    """Production criminal path: router -> retrieve -> ood gate."""
 
     @pytest.fixture(autouse=True, scope="class")
     @staticmethod
@@ -281,7 +296,6 @@ class TestCriminalBranchEndToEnd:
     def test_narrative_crime_retrieves_in_corpus(self) -> None:
         state = answer_query("someone broke into my house and stole my laptop")
         assert state["route"] == "criminal"
-        assert len(state["sub_queries"]) >= 1
         assert len(state["retrieved"]) > 0
         assert state["ood"] is False  # a real crime narrative is in-corpus
 
@@ -292,9 +306,8 @@ class TestCriminalBranchEndToEnd:
         assert any(c.chunk.act == "BNS" for c in state["retrieved"])
 
     def test_full_pipeline_honours_the_truthful_contract(self) -> None:
-        # The Week-2 deliverable: query in -> a full run through generator ->
-        # citation_validator -> checker. The self-correcting system has TWO valid
-        # outcomes, and the point is that both are honest:
+        # The production path runs through generator -> citation_validator. It has
+        # two valid outcomes:
         #   (a) a cited answer whose every citation was actually retrieved, or
         #   (b) a low-confidence decline (loop budget spent) with no citations.
         # What must NEVER happen: a confident answer with absent/unverified

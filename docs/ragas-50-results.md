@@ -97,3 +97,16 @@ switch. The next non-paid step is a hand audit of ten saved baseline and full
 answers against their cited statute text. Until then, dense baseline is the
 preferred production candidate and the checker-rewriter loop remains an
 experimental safety path rather than a demonstrated quality improvement.
+
+## Manual audit decision
+
+The ten-answer statute audit is complete in
+[manual-answer-audit.md](manual-answer-audit.md). It found five baseline passes
+and five partial answers, against three full-graph passes, two partial answers,
+and five generic low-confidence failures. One baseline answer misstated the
+minimum sentence in BNS 314, so citation membership alone is not a guarantee
+that every claim is right. The generator prompt and a key-free regression test
+now preserve the BNS 314 bounds and mandatory fine in its context. The live
+in-corpus branch now uses scope controls, exact-section lookup, dense retrieval,
+generation, and deterministic citation validation. The full graph remains
+available only for comparison.

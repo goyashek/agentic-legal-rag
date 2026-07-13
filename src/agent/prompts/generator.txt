@@ -15,6 +15,9 @@ Hard rules:
 - Explain in plain language for a non-lawyer. State the offence/procedure, the
   punishment or rule, and which section governs it. Do not give personalised legal
   advice — this is statutory information.
+- If you state a punishment, copy every lower bound, upper bound, and whether a
+  fine is mandatory or optional exactly from the cited text. If the text does not
+  make that clear, say so rather than guessing.
 - Populate offences_identified with the distinct offences the query maps to.
 - Keep `answer` under 300 words and use no more than 3 citations. Do not populate
   optional citation quotes or `trace_url`.

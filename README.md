@@ -1,16 +1,16 @@
 # ⚖️ Agentic Legal RAG: Indian Criminal Law (BNS / BNSS / BSA)
 
-> An agentic, self-correcting RAG system for Indian criminal law. Hybrid retrieval, a deterministic citation validator (the anti-hallucination step most systems skip), and dual evaluation (RAGAS diagnostics on the real task plus a BhashaBench-Legal external-comparability number), with a small lint-and-test CI check.
+> A legal RAG system for Indian criminal law. The live path uses dense retrieval and deterministic citation validation; the older self-correcting graph stays available for evaluation. RAGAS diagnostics and a BhashaBench-Legal comparison are recorded with their actual models and samples.
 
 > ⚠️ Statutory information, not legal advice. Not a substitute for a lawyer.
 
-> 🚧 **Status:** the 12-node pipeline, API, and Streamlit client are complete. Docker packaging is deliberately deferred; see Local setup for the currently supported path. See `NOTES.md` for locked decisions and `PROJECT.md` for the build plan.
+> 🚧 **Status:** the simplified live path, API, and Streamlit client are complete. The 12-node graph is retained as an experiment. Docker packaging is deliberately deferred; see Local setup for the currently supported path. See `NOTES.md` for locked decisions and `PROJECT.md` for the build plan.
 
 ---
 
 ## Why this exists
 
-Indian legal RAG is a crowded niche (LexGrid, NYAYA.ai, Legal Assist AI, BNS Mitra, and others). What I didn't see combined in one project was the full stack: agentic self-correction, hybrid retrieval, deterministic citation validation, and dual evaluation. Getting that convergence into one system is the point here.
+Indian legal RAG is a crowded niche (LexGrid, NYAYA.ai, Legal Assist AI, BNS Mitra, and others). This project focuses on a smaller path that can be checked: statute-aware dense retrieval, direct section lookup, citation validation, and documented evaluation. The older agent loop remains useful as a comparison, not as a default.
 
 The 2023 to 2024 IPC/BNS transition also created a live pain point: generalist LLMs still cite *repealed* IPC sections. This system carries an IPC-to-BNS mapping and answers in the new code.
 
@@ -22,34 +22,24 @@ flowchart TD
     F -->|yes| A1[Direct cited answer]
     F -->|no| R{Criminal-law query?}
     R -->|no / unclear| A2[Scope or clarification response]
-    R -->|criminal| E[Intent expansion]
-    E --> H[Hybrid retrieval: BM25 + dense + RRF]
-    H --> X[Cross-encoder reranker]
-    X --> O{In corpus?}
+    R -->|criminal| H[Dense retrieval]
+    H --> O{In corpus?}
     O -->|no| A3[Low-confidence corpus response]
-    O -->|yes| G{Any relevant chunk?}
-    G -->|yes| N[Generate cited answer]
-    G -->|no, budget left| W[Rewrite query]
-    W --> H
+    O -->|yes| N[Generate cited answer]
     N --> C{Citations are in retrieved chunks?}
-    C -->|yes| K{Claims grounded in sources?}
-    C -->|no, budget left| W
-    K -->|yes| A4[LegalAdvice]
-    K -->|no, budget left| W
-    G -->|no, budget spent| A5[Low-confidence response]
-    C -->|no, budget spent| A5
-    K -->|no, budget spent| A5
+    C -->|yes| A4[LegalAdvice]
+    C -->|no| A5[Low-confidence response]
 ```
 
-The graph allows at most two rewrite-and-retrieve iterations. It returns a low-confidence
-response rather than continuing indefinitely.
+The live graph has no rewrite loop. The older full graph with expansion, grading, checking, and
+rewriting is still selectable for evaluation.
 
 ## Key features
 
-- **Deterministic citation validator:** every cited `[Section, Act]` is verified to exist in the retrieved set (pure code, not an LLM). This is the part I think sets it apart, and it's what drives the self-correction loop.
+- **Deterministic citation validator:** every cited `[Section, Act]` is verified to exist in the retrieved set (pure code, not an LLM).
 - **Exact-section fast path:** `"BNS 103"` / `"302 IPC"` resolve via direct metadata lookup, with IPC references bridged to BNS.
-- **Hybrid retrieval:** BM25 + dense + RRF (k=60), cross-encoder reranker on by default.
-- **Intent expansion:** one messy narrative into parallel offence sub-queries (cross-sectional reasoning).
+- **Dense retrieval:** the default uses the highest-scoring dense-only setting, with no reranker.
+- **Experimental full graph:** intent expansion, grading, checking, and rewriting remain available for reproducible comparisons.
 - **Auditable by design:** answers carry structured citations and can include a LangSmith trace URL when tracing is configured.
 
 ## Competitor comparison
@@ -59,14 +49,13 @@ metrics use each project's own setup, so they are context rather than a leaderbo
 
 | System | Retrieval and agent loop | Grounding check | Reported evaluation |
 |---|---|---|---|
-| **This project** | Dense or hybrid retrieval with a LangGraph rewrite loop | Deterministic cited-section membership check, then claim grounding check | 50-scenario retrieval set; two full RAGAS-50 runs; 60-question BhashaBench-Legal sample |
+| **This project** | Dense live path; legacy LangGraph rewrite loop for comparison | Deterministic cited-section membership check | 50-scenario retrieval set; two full RAGAS-50 runs; 60-question BhashaBench-Legal sample |
 | **LexGrid** | Hybrid ANN + full-text RRF, reranking, exact-section bypass; single-shot | Citation format and distance threshold | 12-case suite: MRR 0.833, Recall@5 0.814, P@5 0.233, legal accuracy 0.703 |
 | **Legal Assist AI** | Dense FAISS retrieval with a prompt-based guardrail; single-shot | “I don't know” guardrail | AIBE 60.08%; BERTScore 76.9% |
 | **Indian Criminal Law RAG Agent** | Dense top-5 retrieval with a three-agent CrewAI loop | LLM grounding assessment | 20-query human evaluation: 85–90% top-5 relevance, 92% grounding |
 
 The intended difference is not that any single component is novel. It is the combination of
-hybrid retrieval, bounded self-correction, deterministic citation validation, and reported
-failure cases.
+statute-aware retrieval, deterministic citation validation, and reported failure cases.
 
 ## Evaluation
 
@@ -89,9 +78,8 @@ exist in the corpus before it enters the set). Both rows use the rebuilt 1,151-c
 | hybrid + reranker (current agent) | 0.164 | 0.630 | 0.422 |
 
 The rebuilt corpus changes the original hybrid story: dense-only wins this retrieval-only set,
-and dense + reranker also beats the current hybrid + reranker row. The fresh full RAGAS runs
-below make dense without reranking the leading candidate, but the node-level ablation still
-needs to show which graph stages earn their cost. (P@5 is low by construction because most
+and dense + reranker also beats the hybrid + reranker row. The node-level ablation and manual
+audit below support dense without reranking as the live path. (P@5 is low by construction because most
 scenarios have one to three relevant sections, capping a perfect single-answer at 0.20.)
 
 ### RAGAS (real generative task: DeepSeek Flash judge / Flash control nodes / Pro generator)
@@ -100,15 +88,15 @@ Two complete RAGAS-50 runs use a DeepSeek Flash judge and local BGE-small embedd
 uses Flash control nodes and a Pro final generator. Both numbers are low enough that this remains
 a local demo rather than a legal-answer service.
 
-| full-graph retrieval | faithfulness | answer relevancy | context precision | context recall |
+| historical full-graph retrieval | faithfulness | answer relevancy | context precision | context recall |
 |---|---:|---:|---:|---:|
 | dense, no reranker | 0.309 | **0.518** | 0.700 | **0.840** |
-| hybrid RRF + reranker (current default) | **0.314** | 0.386 | **0.709** | 0.732 |
+| hybrid RRF + reranker | **0.314** | 0.386 | **0.709** | 0.732 |
 
 Dense has nearly the same faithfulness as hybrid, but its answer relevancy is 0.132 higher and
 its context recall is 0.108 higher. Hybrid gains only 0.005 in faithfulness and 0.010 in context
-precision. The next evaluation compares a plain dense RAG path with the grader, checker, and
-current full graph one stage at a time. See [the complete RAGAS-50 record](docs/ragas-50-results.md).
+precision. The 20-case node ablation and ten-answer statute audit then moved the live default to
+the plain dense path. See [the complete RAGAS record](docs/ragas-50-results.md).
 
 ### MCQ external comparability — BhashaBench-Legal criminal slice (Cerebras `gpt-oss-120b`)
 
@@ -144,8 +132,12 @@ retrieval without reranking, DeepSeek V4 Flash for control and judging, and V4 P
 The simple baseline is the preferred production candidate. The grader improves context quality,
 but its answer-level change is small and it costs eight extra Flash calls. The checker and rewrite
 loop add recall but reduce answer grounding and relevance on this sample. This is a 20-case
-diagnostic, not a new headline score. I will hand-audit ten saved answers before changing the
-live default. See [the complete RAGAS record](docs/ragas-50-results.md).
+diagnostic, not a new headline score. The ten-answer statute audit found five generic
+low-confidence replies from the full graph after it rejected citation-valid answers. The simple
+path had five fully supported answers and five partial answers; one partial answer misstated a
+sentence. A regression test now covers the relevant source text and prompt rule. See
+[the complete RAGAS record](docs/ragas-50-results.md) and
+[the manual answer audit](docs/manual-answer-audit.md).
 
 ### A failure handled safely
 
