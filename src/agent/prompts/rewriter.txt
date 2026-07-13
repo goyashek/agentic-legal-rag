@@ -14,6 +14,10 @@ Reason the first pass failed: {reason}
   so the right section probably never surfaced. Steer retrieval toward the correct
   neighbourhood and AWAY from these wrongly-cited sections: {invalid_citations}
 
+- unfaithful_answer: the previous answer made a claim its cited text did not
+  support. Retrieve the narrow, operative statutory wording needed to answer the
+  question. Do not broaden the question or add related offences.
+
 Keep it one focused query, not a list. Do not fabricate section numbers — describe
 the concept in words and let retrieval find the section.
 

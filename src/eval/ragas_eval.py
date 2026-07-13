@@ -1,35 +1,29 @@
-"""RAGAS evaluation, my main metric, run on the actual generative task.
+"""RAGAS evaluation on the same cited-answer task the agent actually handles.
 
-Unlike AIBE (external, full of caveats), RAGAS runs on the 50 scenarios I
-hand-labeled myself, which mirror what the system actually does: generative cited
-criminal-law advice. So this is the number I trust most.
+The 50 scenarios are my hand-labelled criminal-law prompts. I track faithfulness,
+answer relevancy, context precision, and context recall, with a CI alert for a drop
+of more than five points from the recorded baseline.
 
-Metrics I'm tracking: faithfulness, answer_relevancy, context_precision,
-context_recall. Regression alert if any drops >5pt from baseline (also enforced in CI
-via smoke_gate.py).
+DeepSeek V4 Flash now has enough account-level concurrency that scenarios can run
+without the old artificial delay. The answer trace and optional score manifest make
+each paid evaluation reproducible. Unit tests still inject a fake answer function,
+and RAGAS remains a lazy import so they need neither an API key nor the package.
 
-Wiring notes:
-- The agent run per scenario is the quota sink (~12 flash calls each: router + expander
-  + ~8 grader + generator + checker). Flash-lite's wall is RPM 15, so `collect_samples`
-  PACES between scenarios (`pace_seconds`) rather than rationing tokens/day. 50 scenarios
-  at a safe pace is ~40 min; sample a subset for a quick check.
-- `answer_fn` is injectable (defaults to the compiled graph) so unit tests collect with a
-  fake at zero quota. `ragas` itself is imported lazily inside `run_ragas_eval`, so the
-  keyless suite stays green without it installed.
-- RAGAS needs a `reference` for context_precision/recall; the scenarios carry gold SECTION
-  IDs, not gold prose, so the reference is the statutory text of those sections (the text a
-  correct answer must rest on). Built from the corpus in `build_reference`.
-
-Scenario file: data/eval/scenarios.jsonl (kept in git, see .gitignore).
+The scenarios contain gold section IDs rather than reference prose. For the two
+context metrics, `build_reference` joins the corresponding statutory chunks.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Literal
 
+from src.agent.graph import PipelineVariant
 from src.eval.retrieval_baseline import load_scenarios  # same jsonl loader, don't duplicate
 
 # The four RAGAS metrics I headline. Names match the ragas metric objects AND the
@@ -39,6 +33,10 @@ METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision", "contex
 # RAGAS answer-relevancy embeddings run locally, so evaluation makes no provider call beyond
 # DeepSeek's judge. Small keeps the evaluator light; override only when comparing models.
 _RAGAS_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
+# DeepSeek V4 allows 2,500 concurrent Flash requests per account. Eight workers
+# keep this evaluation comfortably below that ceiling while avoiding the former
+# serial 200-call judge run.
+RAGAS_MAX_WORKERS = 8
 
 
 class _LegacyEmbeddingAdapter:
@@ -145,16 +143,14 @@ def collect_samples(
     *,
     answer_fn=None,
     corpus=None,
-    pace_seconds: float = 4.0,
+    pace_seconds: float = 0.0,
     sleep=time.sleep,
 ) -> list[dict]:
     """Run the agent over each scenario and collect the RAGAS inputs.
 
-    Returns dicts: {user_input, retrieved_contexts, response, reference, difficulty}.
-    Paces `pace_seconds` between scenarios to keep the per-minute request rate under
-    the flash-tier RPM cap (the real bottleneck, not tokens/day). `answer_fn` defaults
-    to the compiled graph's `answer_query`; injected in tests. `sleep` injected so the
-    pacing itself is testable without real waits.
+    Returns RAGAS inputs plus the graph trace for each scenario. `answer_fn` defaults
+    to the compiled graph's `answer_query`; injected in tests. `sleep` is injected so
+    optional pacing is testable without real waits.
     """
     if answer_fn is None:
         from src.agent.graph import answer_query
@@ -169,19 +165,65 @@ def collect_samples(
     rows: list[dict] = []
     for i, s in enumerate(scenarios):
         if i > 0 and pace_seconds > 0:
-            sleep(pace_seconds)  # rate-limit between agent runs (RPM 15 wall)
+            sleep(pace_seconds)
         state = answer_fn(s["query"])
         response, contexts = _extract(state)
+        answer = state.get("answer") or state.get("fast_path_answer")
+        trace_notes = state.get("trace_notes", [])
         rows.append(
             {
+                "scenario_id": s.get("id", "?"),
                 "user_input": s["query"],
                 "retrieved_contexts": contexts,
                 "response": response,
                 "reference": build_reference(s["relevant_sections"], text_by_section),
                 "difficulty": s.get("difficulty", "?"),
+                "trace_notes": trace_notes,
+                "citations": [
+                    citation.model_dump(exclude_none=True)
+                    for citation in getattr(answer, "citations", [])
+                ],
+                "confidence": getattr(answer, "confidence", None),
+                "in_corpus": getattr(answer, "in_corpus", None),
             }
         )
     return rows
+
+
+def write_samples(rows: list[dict], path: str | Path) -> None:
+    """Write raw agent outputs and trace notes for a reproducible scored run."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def write_scores(
+    scores: RagasScores,
+    path: str | Path,
+    *,
+    retrieval_mode: str,
+    use_reranker: bool,
+    pipeline: str,
+    samples_out: str | Path | None,
+) -> None:
+    """Persist the result with the model and retrieval settings that produced it."""
+    from src.agent.llm import _model_for
+
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "judge_model": _model_for("flash"),
+        "control_model": _model_for("flash"),
+        "answer_model": _model_for("pro"),
+        "retrieval_mode": retrieval_mode,
+        "use_reranker": use_reranker,
+        "pipeline": pipeline,
+        "samples_out": str(samples_out) if samples_out is not None else None,
+        "scores": asdict(scores),
+    }
+    out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 def aggregate(scored_rows: list[dict]) -> RagasScores:
@@ -219,7 +261,12 @@ def run_ragas_eval(
     *,
     answer_fn=None,
     corpus=None,
-    pace_seconds: float = 4.0,
+    pace_seconds: float = 0.0,
+    retrieval_mode: Literal["hybrid", "dense", "sparse"] = "hybrid",
+    use_reranker: bool = True,
+    pipeline: PipelineVariant = "full",
+    samples_out: str | Path | None = None,
+    scores_out: str | Path | None = None,
 ) -> RagasScores:
     """Run the agent over scenarios and score with RAGAS.
 
@@ -228,10 +275,22 @@ def run_ragas_eval(
     """
     if scenarios is None:
         scenarios = load_scenarios("data/eval/scenarios.jsonl")
+    if answer_fn is None:
+        from src.agent.graph import answer_query
 
-    rows = collect_samples(
-        scenarios, answer_fn=answer_fn, corpus=corpus, pace_seconds=pace_seconds
-    )
+        def answer_fn(query: str):
+            return answer_query(
+                query,
+                retrieval_mode=retrieval_mode,
+                use_reranker=use_reranker,
+                pipeline=pipeline,
+            )
+
+    rows = collect_samples(scenarios, answer_fn=answer_fn, corpus=corpus, pace_seconds=pace_seconds)
+    for row in rows:
+        row["pipeline"] = pipeline
+    if samples_out is not None:
+        write_samples(rows, samples_out)
 
     llm, embeddings = _ragas_evaluator()
     from ragas import EvaluationDataset, RunConfig, evaluate
@@ -251,13 +310,12 @@ def run_ragas_eval(
     answer_relevancy.strictness = 1
 
     dataset = EvaluationDataset.from_list(
-        [{k: v for k, v in r.items() if k != "difficulty"} for r in rows]
+        [
+            {key: row[key] for key in ("user_input", "retrieved_contexts", "response", "reference")}
+            for row in rows
+        ]
     )
-    # max_workers=1: ragas otherwise fans ALL judge jobs out at once; against a rate-limited
-    # judge (5 RPM) the later jobs sit in a queue and blow ragas's per-job timeout -> spurious
-    # 0.0 scores. Serial submission means each job's timer starts only when it runs. Generous
-    # timeout for the slow paced judge. This — not the LLM-level limiter — is the real burst fix.
-    run_config = RunConfig(max_workers=1, timeout=600)
+    run_config = RunConfig(max_workers=RAGAS_MAX_WORKERS, timeout=600)
     result = evaluate(
         dataset=dataset,
         metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
@@ -269,11 +327,39 @@ def run_ragas_eval(
     scored = result.to_pandas().to_dict("records")
     for row, src in zip(scored, rows, strict=True):
         row["difficulty"] = src["difficulty"]  # ragas drops it; realign by order
-    return aggregate(scored)
+    scores = aggregate(scored)
+    if scores_out is not None:
+        write_scores(
+            scores,
+            scores_out,
+            retrieval_mode=retrieval_mode,
+            use_reranker=use_reranker,
+            pipeline=pipeline,
+            samples_out=samples_out,
+        )
+    return scores
 
 
 def main() -> None:  # pragma: no cover - thin CLI wrapper
-    scores = run_ragas_eval()
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser(description="Run the full RAGAS scenario evaluation")
+    parser.add_argument("--mode", choices=("hybrid", "dense", "sparse"), default="hybrid")
+    parser.add_argument("--no-rerank", action="store_true")
+    parser.add_argument(
+        "--pipeline", choices=("baseline", "grader", "checker", "full"), default="full"
+    )
+    parser.add_argument("--samples-out", type=Path)
+    parser.add_argument("--scores-out", type=Path)
+    args = parser.parse_args()
+
+    scores = run_ragas_eval(
+        retrieval_mode=args.mode,
+        use_reranker=not args.no_rerank,
+        pipeline=args.pipeline,
+        samples_out=args.samples_out,
+        scores_out=args.scores_out,
+    )
     print(f"RAGAS over {scores.n_scenarios} scenarios:")
     for m in METRIC_NAMES:
         print(f"  {m:20} {getattr(scores, m):.3f}")

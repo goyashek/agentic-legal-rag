@@ -1,49 +1,70 @@
 # RAGAS-50 results
 
-This is the first complete run over the 50 hand-labelled scenarios in
-`data/eval/scenarios.jsonl` (19 easy, 24 medium, 7 hard). It is a baseline, not a
-production-accuracy claim.
+This records the two fresh runs over the 50 hand-labelled scenarios in
+`data/eval/scenarios.jsonl` (19 easy, 24 medium, 7 hard). Both runs used the
+same current full graph. They are diagnostics, not production-accuracy claims.
 
 ## Run setup
 
-- Agent: DeepSeek V4 Flash for routing, expansion, grading, rewriting, and checking;
-  DeepSeek V4 Pro for the final answer. Thinking was disabled for these bounded calls.
-- RAGAS judge: DeepSeek V4 Flash, `temperature=0`, 256 completion-token ceiling.
+- Agent: DeepSeek V4 Flash for routing, expansion, grading, rewriting, and
+  checking. DeepSeek V4 Pro wrote the final answer. Thinking was disabled.
+- RAGAS judge: DeepSeek V4 Flash at temperature 0 with a 256-token ceiling.
 - Answer-relevancy embeddings: local `BAAI/bge-small-en-v1.5`.
-- Corpus: rebuilt 1,151-chunk local BNS / BNSS / BSA index after sentence-aware chunk repair.
-- Retrieval: hybrid RRF + cross-encoder reranker, which was the current agent configuration.
-- Scoring: RAGAS `strictness=1`, one serial worker. The completed run used the embedding
-  compatibility repair in commit `40278d1`.
+- Corpus: the 1,151-chunk local BNS, BNSS, and BSA index after sentence-aware
+  chunk repair.
+- Scoring: RAGAS `strictness=1` and eight judge workers. The output traces and
+  score manifests are local evaluation artifacts and are not committed.
 
 ## Overall scores
 
-| metric | score |
-|---|---:|
-| faithfulness | 0.262 |
-| answer relevancy | 0.419 |
-| context precision | 0.671 |
-| context recall | 0.722 |
+| retrieval used by the full graph | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| dense, no reranker | 0.309 | **0.518** | 0.700 | **0.840** |
+| hybrid RRF + reranker (current default) | **0.314** | 0.386 | **0.709** | 0.732 |
+
+Dense is the next candidate. Its faithfulness is effectively tied with hybrid,
+while answer relevancy is higher by 0.132 and context recall is higher by 0.108.
+Hybrid's gains are 0.005 in faithfulness and 0.010 in context precision. Those
+small gains do not yet justify keeping its extra retrieval stages.
 
 ## Difficulty slices
 
-| difficulty | faithfulness | answer relevancy | context precision | context recall |
-|---|---:|---:|---:|---:|
-| easy | 0.21 | 0.42 | 0.70 | 0.76 |
-| medium | 0.31 | 0.42 | 0.68 | 0.67 |
-| hard | 0.25 | 0.41 | 0.56 | 0.80 |
+| retrieval | difficulty | faithfulness | answer relevancy | context precision | context recall |
+|---|---|---:|---:|---:|---:|
+| dense, no reranker | easy | 0.320 | 0.515 | 0.784 | 0.947 |
+| dense, no reranker | medium | 0.330 | 0.540 | 0.663 | 0.817 |
+| dense, no reranker | hard | 0.207 | 0.451 | 0.595 | 0.625 |
+| hybrid RRF + reranker | easy | 0.271 | 0.366 | 0.680 | 0.772 |
+| hybrid RRF + reranker | medium | 0.307 | 0.356 | 0.718 | 0.722 |
+| hybrid RRF + reranker | hard | 0.458 | 0.543 | 0.762 | 0.660 |
 
-## Reading the result
+The seven-item hard slice is too small to settle the retrieval choice by itself.
+It is useful as a warning that the score changes by difficulty.
 
-Retrieval coverage is materially better than answer quality: context recall is 0.722, while
-faithfulness and answer relevancy are low. The earlier BNS 303 split-clause problem is fixed,
-but this run shows that the remaining grounding and answer-quality gaps are broader than that
-one section. These values are the reason the project is still a local demo, not a legal-advice
-service.
+## What the traces show
 
-A later local retrieval ablation found dense + reranker stronger than this hybrid setup, but it
-does not change the provenance of this RAGAS result. The live default stays hybrid until that
-candidate has its own end-to-end RAGAS run.
+The deterministic citation validator accepted every generated answer in both
+runs: 93 dense attempts and 99 hybrid attempts. The LLM checker rejected 56
+dense attempts and 62 hybrid attempts. That caused 44 dense query rewrites and
+49 hybrid rewrites. Thirteen dense queries and twenty hybrid queries then ended
+with a low-confidence response.
 
-The scorer completed all 200 metric jobs. An earlier incomplete attempt exposed an
-`embed_query` interface mismatch and was stopped rather than reported; no partial score from it
-is used here.
+This points at answer grounding and the checker-to-rewriter recovery path, not
+at missing retrieval context alone. A checker failure currently changes the
+query, often returns similar context, and can fail again. The checked answer is
+then replaced with a low-confidence response even when the grader found several
+relevant sections.
+
+## Next comparison
+
+The evaluation runner now has four fixed variants, all using dense retrieval
+without reranking:
+
+1. `baseline`: retrieve, generate, then validate citations.
+2. `grader`: baseline plus the relevance grader.
+3. `checker`: grader plus the faithfulness checker, without query retries.
+4. `full`: the existing router, expander, OOD gate, checker, and rewrite loop.
+
+New traces save the structured citations, confidence, and in-corpus flag. That
+makes a ten-answer statute audit possible before relying on either Flash-based
+judge to decide the production graph.

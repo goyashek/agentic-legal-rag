@@ -21,7 +21,12 @@ from src.agent.nodes.citation_validator import (
     normalize_section,
     validate_citations,
 )
-from src.agent.nodes.fast_path import detect_exact_section, lookup_section
+from src.agent.nodes.fast_path import (
+    build_fast_path_answer,
+    detect_exact_section,
+    lookup_section,
+    lookup_section_chunks,
+)
 from src.agent.nodes.generator import generate_answer, generator_node
 from src.agent.nodes.grader import GradeVerdict, grade_chunks, grader_node
 from src.agent.nodes.intent_expander import (
@@ -193,6 +198,17 @@ class TestLookupSection:
     def test_missing_returns_none(self) -> None:
         assert lookup_section("BNS", "999", []) is None
 
+    def test_fast_path_reassembles_all_section_chunks(self) -> None:
+        chunks = [
+            LegalChunk("BNS::303::1", "BNS", "303", "Theft", "Heading\n\nsecond", "Heading"),
+            LegalChunk("BNS::303::0", "BNS", "303", "Theft", "Heading\n\nfirst", "Heading"),
+        ]
+        section_chunks = lookup_section_chunks("BNS", "303", chunks)
+        answer = build_fast_path_answer("BNS 303", section_chunks)
+
+        assert answer.answer.endswith("first second")
+        assert answer.citations[0].section_id == "303"
+
 
 class TestOutOfDomainGate:
     def test_empty_retrieval_is_ood(self) -> None:
@@ -247,8 +263,9 @@ class TestRouterUnit:
         assert out["answer"].in_corpus is False
 
     def test_needs_clarification_stays_in_corpus(self) -> None:
-        out = router_node({"query": "my friend is in trouble"},
-                          client=_FakeClient("needs_clarification"))
+        out = router_node(
+            {"query": "my friend is in trouble"}, client=_FakeClient("needs_clarification")
+        )
         assert out["answer"].confidence == "low"
         assert out["answer"].in_corpus is True
 
@@ -375,9 +392,7 @@ class TestRewriterUnit:
 
     def test_invalid_citation_reason_passed_to_prompt(self) -> None:
         fake = _FakeRewriterClient("better query")
-        rewrite_query(
-            "q", reason="invalid_citation", invalid_citations=["BNS 999"], client=fake
-        )
+        rewrite_query("q", reason="invalid_citation", invalid_citations=["BNS 999"], client=fake)
         content = fake.calls[0]["messages"][0]["content"]
         assert "invalid_citation" in content
         assert "BNS 999" in content
@@ -391,11 +406,18 @@ class TestRewriterUnit:
     def test_node_infers_invalid_citation_reason(self) -> None:
         # citation_valid False takes priority -> reason should be invalid_citation
         fake = _FakeRewriterClient("x")
-        out = rewriter_node(
-            {"query": "orig", "iteration": 1, "citation_valid": False}, client=fake
-        )
+        out = rewriter_node({"query": "orig", "iteration": 1, "citation_valid": False}, client=fake)
         assert out["iteration"] == 2
         assert any("invalid_citation" in n for n in out["trace_notes"])
+
+    def test_node_infers_unfaithful_answer_reason(self) -> None:
+        fake = _FakeRewriterClient("narrow statutory wording")
+        out = rewriter_node(
+            {"query": "orig", "iteration": 1, "citation_valid": True, "faithful": False},
+            client=fake,
+        )
+        assert out["iteration"] == 2
+        assert any("unfaithful_answer" in n for n in out["trace_notes"])
 
 
 class TestGeneratorUnit:
@@ -506,6 +528,18 @@ class TestCitationValidator:
         assert out["invalid_citations"] == ["BNS 999"]
         assert any("citation_validator: invalid" in n for n in out["trace_notes"])
 
+    def test_node_rejects_section_excluded_from_generation_context(self) -> None:
+        adv = _advice([("BNS", "999")])
+        out = citation_validator_node(
+            {
+                "answer": adv,
+                "relevant_chunks": [_chunk("103")],
+                "retrieved": [_chunk("103"), _chunk("999")],
+            }
+        )
+        assert out["citation_valid"] is False
+        assert out["invalid_citations"] == ["BNS 999"]
+
     def test_node_no_citations_is_invalid(self) -> None:
         # an answer that cites nothing isn't a valid substantive answer
         adv = _advice([])
@@ -545,6 +579,21 @@ class TestCheckerUnit:
         out = checker_node({"answer": adv, "retrieved": [_chunk("103")]}, client=fake)
         assert out["faithful"] is True
         assert any("checker: faithful" in n for n in out["trace_notes"])
+
+    def test_node_uses_generation_context(self) -> None:
+        adv = _advice([("BNS", "103")])
+        fake = _FakeCheckerClient(faithful=True)
+        checker_node(
+            {
+                "answer": adv,
+                "relevant_chunks": [_chunk("103")],
+                "retrieved": [_chunk("103"), _chunk("999")],
+            },
+            client=fake,
+        )
+        content = fake.calls[0]["messages"][0]["content"]
+        assert "Section 103" in content
+        assert "Section 999" not in content
 
 
 @pytest.mark.live

@@ -83,7 +83,11 @@ def citation_validator_node(state: AgentState) -> AgentState:
             "trace_notes": [*notes, "citation_validator: no answer"],
         }
 
-    valid, invalid = validate_citations(answer, state.get("retrieved", []))
+    # The generator only sees graded chunks when any passed the filter. Validating
+    # against the larger retrieval pool could approve a citation to text the model
+    # never received.
+    generation_context = state.get("relevant_chunks") or state.get("retrieved", [])
+    valid, invalid = validate_citations(answer, generation_context)
     # No citations at all is not a valid substantive answer.
     if not answer.citations:
         valid = False

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from src.eval.section_precision import section_precision_at_k, section_recall
 
@@ -63,11 +64,12 @@ def run_baseline(
     reranker=None,
     retrieve_k: int = 20,
     rerank_k: int = 8,
+    mode: Literal["hybrid", "dense", "sparse"] = "hybrid",
 ) -> list[ScenarioResult]:
-    """Evaluate the retriever (optionally reranked) over the scenarios."""
+    """Evaluate one retrieval mode, optionally followed by reranking."""
     results: list[ScenarioResult] = []
     for s in scenarios:
-        candidates = retriever.retrieve(s["query"], top_k=retrieve_k)
+        candidates = retriever.retrieve(s["query"], top_k=retrieve_k, mode=mode)
         if reranker is not None:
             candidates = reranker.rerank(s["query"], candidates, top_k=rerank_k)
         labels = _labels(candidates)
@@ -97,14 +99,25 @@ def summarize(results: list[ScenarioResult]) -> dict[str, float]:
 
 def main() -> None:  # pragma: no cover - thin CLI wrapper
     import logging
+    from argparse import ArgumentParser
 
     logging.disable(logging.WARNING)
     from src.retrieval.hybrid import HybridRetriever
     from src.retrieval.rerank import Reranker
 
+    parser = ArgumentParser(description="Run a labelled retrieval baseline")
+    parser.add_argument("--mode", choices=("hybrid", "dense", "sparse"), default="hybrid")
+    parser.add_argument("--no-rerank", action="store_true")
+    args = parser.parse_args()
+
     scenarios = load_scenarios("data/eval/scenarios.jsonl")
     retriever = HybridRetriever(collection="legal", bm25_path="data/processed/bm25.pkl")
-    results = run_baseline(retriever, scenarios, reranker=Reranker())
+    results = run_baseline(
+        retriever,
+        scenarios,
+        reranker=None if args.no_rerank else Reranker(),
+        mode=args.mode,
+    )
 
     for r in results:
         print(

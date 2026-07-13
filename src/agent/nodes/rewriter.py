@@ -16,13 +16,15 @@ injected (defaults to shared Flash) so tests run at zero quota.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from src.agent.llm import get_client, load_prompt
 from src.agent.state import AgentState
 
 # Why the rewriter fired, which changes how the prompt steers the rewrite.
-Reason = str  # "low_relevance" | "invalid_citation"
+Reason = Literal["low_relevance", "invalid_citation", "unfaithful_answer"]
 
 
 class RewrittenQuery(BaseModel):
@@ -40,7 +42,8 @@ def rewrite_query(
 ) -> str:
     """Produce a better query for the next retrieval pass.
 
-    reason is "low_relevance" or "invalid_citation" and decides how I rewrite.
+    reason identifies whether retrieval missed, a citation was fabricated, or an
+    answer overreached its cited text.
     invalid_citations are the sections that got fabricated last round, so I can
     nudge retrieval toward the right neighborhood instead of the wrong one. Falls
     back to the original query if the model returns nothing usable.
@@ -60,9 +63,11 @@ def rewrite_query(
 
 
 def _reason_from_state(state: AgentState) -> Reason:
-    """Infer why we're rewriting. Citation rejection takes priority over low relevance."""
+    """Infer why we're rewriting. Citation rejection takes priority over other failures."""
     if state.get("citation_valid") is False:
         return "invalid_citation"
+    if state.get("faithful") is False:
+        return "unfaithful_answer"
     return "low_relevance"
 
 

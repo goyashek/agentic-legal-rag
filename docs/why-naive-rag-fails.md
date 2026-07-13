@@ -16,9 +16,9 @@ legal term or section. The pipeline expands the narrative into offence-focused s
 combines BM25 and dense retrieval with reciprocal-rank fusion, then reranks the candidates.
 That does not make retrieval perfect. On the rebuilt 50-scenario set, BM25 alone reaches only
 0.330 Recall@5. Dense-only reaches 0.750 Recall@5 and 0.706 MRR; the current hybrid + reranker
-agent reaches 0.630 and 0.422. That is an unexpected result worth recording, not hiding. Dense
-+ reranker is the next end-to-end candidate, but the published RAGAS baseline remains attached
-to the currently configured hybrid agent until that candidate is rerun through the full graph.
+agent reaches 0.630 and 0.422. A fresh full-graph RAGAS run now also favors dense without a
+reranker for answer relevancy and context recall. The next comparison isolates the grader,
+checker, and rewrite loop before changing the live graph.
 
 ## A citation format is not citation validation
 
@@ -45,17 +45,18 @@ I fixed the cause in the shared chunker rather than making a BNS-303 exception. 
 semantic fragments into complete sentences before repacking them into the 512-token budget. BNS
 303 is four chunks, and the base-punishment sentence now stays in one of them.
 
-That repair matters, but it is not a victory lap. The complete RAGAS-50 run scores 0.262 for
-faithfulness and 0.419 for answer relevancy, even though context recall is 0.722. The project
-therefore has evidence of useful retrieval coverage and evidence that its answer path still
-needs work. That is exactly why the guardrails remain in place.
+That repair matters, but it does not make the answer path ready. The fresh dense RAGAS-50 run
+scores 0.309 for faithfulness and 0.518 for answer relevancy, even though context recall is
+0.840. The fresh hybrid run is 0.314, 0.386, and 0.732 respectively. Retrieval coverage is
+better than final answer quality, so the project still needs an ablation of its guardrails.
 
 ## What the current results do and do not show
 
 The project has a section-labelled 50-scenario retrieval set, a complete RAGAS-50 baseline, and
 a directional 60-question BhashaBench-Legal comparison. Those are useful signals, not a claim
-of production legal accuracy. Dense, sparse, hybrid, and reranked retrieval paths are all
-captured; a fresh end-to-end run for the dense candidate is still pending.
+of production legal accuracy. Dense, sparse, hybrid, and reranked retrieval paths are captured,
+and fresh full-graph RAGAS runs exist for dense and hybrid retrieval. A node-level ablation is
+still pending.
 
 The takeaway is deliberately small: retrieval quality, citation validity, and claim grounding
 are separate problems. A system that treats them as one prompt is harder to audit when it fails.

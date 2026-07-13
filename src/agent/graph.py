@@ -38,12 +38,16 @@ injectable so logic tests run with fakes at zero quota.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from langgraph.graph import END, START, StateGraph
 
 from src.agent.state import AgentState
 from src.retrieval.hybrid import RetrievedChunk
 
 RETRIEVAL_LOOP_BUDGET = 2
+RetrievalMode = Literal["hybrid", "dense", "sparse"]
+PipelineVariant = Literal["baseline", "grader", "checker", "full"]
 
 # Retrieval knobs (mirror the baseline: 20 fused candidates -> rerank to 8).
 RETRIEVE_K = 20
@@ -114,6 +118,26 @@ def route_after_checker(state: AgentState) -> str:
     return "low_confidence"
 
 
+def route_after_grader_once(state: AgentState) -> str:
+    """Ablation route: a failed grader ends rather than changing the query."""
+    return "generator" if state.get("grade_pass") else "low_confidence"
+
+
+def route_after_citation_validator_once(state: AgentState) -> str:
+    """Ablation route: an invalid citation ends rather than changing the query."""
+    return END if state.get("citation_valid") else "low_confidence"
+
+
+def route_after_citation_to_checker_once(state: AgentState) -> str:
+    """Ablation route: only structurally valid answers reach the checker."""
+    return "checker" if state.get("citation_valid") else "low_confidence"
+
+
+def route_after_checker_once(state: AgentState) -> str:
+    """Ablation route: measure the checker without the rewriter confound."""
+    return END if state.get("faithful") else "low_confidence"
+
+
 # --- orchestration node (lives here, not nodes/, since it drives the retrieval
 #     layer rather than making an agent decision) -------------------------------
 
@@ -124,18 +148,20 @@ _RETRIEVER = None
 _RERANKER = None
 
 
-def _retrieval_stack():
-    """Lazily build (retriever, reranker); cached process-wide."""
+def _retrieval_stack(*, with_reranker: bool = True):
+    """Lazily build the retriever and, when needed, the reranker."""
     global _RETRIEVER, _RERANKER
     if _RETRIEVER is None:
         from src.retrieval.hybrid import HybridRetriever
-        from src.retrieval.rerank import Reranker
 
         _RETRIEVER = HybridRetriever(
             collection=QDRANT_COLLECTION, bm25_path="data/processed/bm25.pkl"
         )
+    if with_reranker and _RERANKER is None:
+        from src.retrieval.rerank import Reranker
+
         _RERANKER = Reranker()
-    return _RETRIEVER, _RERANKER
+    return _RETRIEVER, _RERANKER if with_reranker else None
 
 
 def reset_retrieval_stack() -> None:
@@ -162,35 +188,49 @@ def _dedupe_by_chunk_id(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
         cid = c.chunk.chunk_id
         if cid not in best or c.rrf_score > best[cid].rrf_score:
             best[cid] = c
-    return list(best.values())
+    return sorted(best.values(), key=lambda c: c.rrf_score, reverse=True)
 
 
-def retrieve_node(state: AgentState, *, retriever=None, reranker=None) -> AgentState:
-    """Fan the retriever over sub_queries, dedupe, rerank down to ~8. Sets `retrieved`.
+def retrieve_node(
+    state: AgentState,
+    *,
+    retriever=None,
+    reranker=None,
+    mode: RetrievalMode = "hybrid",
+    use_reranker: bool = True,
+) -> AgentState:
+    """Fan retrieval over sub-queries and optionally rerank the result.
 
     retriever/reranker are injectable so the fan+dedupe logic tests with fakes; by
     default the cached real stack is used. Reranks against the ORIGINAL query (the
     user's actual intent), not the sub-queries, so the final ordering reflects what
     was asked rather than one decomposed facet.
     """
-    if retriever is None or reranker is None:
-        retriever, reranker = _retrieval_stack()
+    if retriever is None:
+        retriever, default_reranker = _retrieval_stack(with_reranker=use_reranker)
+        if reranker is None:
+            reranker = default_reranker
 
     sub_queries = state.get("sub_queries") or [state["query"]]
     pooled: list[RetrievedChunk] = []
     for sq in sub_queries:
-        pooled.extend(retriever.retrieve(sq, top_k=RETRIEVE_K))
+        pooled.extend(retriever.retrieve(sq, top_k=RETRIEVE_K, mode=mode))
 
     deduped = _dedupe_by_chunk_id(pooled)
-    reranked = reranker.rerank(state["query"], deduped, top_k=RERANK_K)
+    ranked = (
+        reranker.rerank(state["query"], deduped, top_k=RERANK_K)
+        if use_reranker and reranker is not None
+        else deduped[:RERANK_K]
+    )
 
     notes = state.get("trace_notes", [])
     return {
-        "retrieved": reranked,
+        "retrieved": ranked,
         "trace_notes": [
             *notes,
             f"retrieve: {len(sub_queries)} sub-queries -> {len(pooled)} hits "
-            f"-> {len(deduped)} unique -> {len(reranked)} reranked",
+            f"-> {len(deduped)} unique -> {len(ranked)} {mode}"
+            + (" + rerank" if use_reranker else ""),
         ],
     }
 
@@ -213,22 +253,28 @@ def not_in_corpus_node(state: AgentState) -> AgentState:
 
 
 def low_confidence_node(state: AgentState) -> AgentState:
-    """Terminal for a spent loop budget: return what we have, flagged low-confidence.
-
-    Reached when the grader keeps failing after RETRIEVAL_LOOP_BUDGET rewrites (Thu
-    onward the citation validator / checker also route here). No generator yet, so
-    this hands back the best relevant chunks as a partial, honest about the low
-    confidence rather than fabricating a clean answer.
-    """
+    """Terminal for retrieval, citation, or grounding failures."""
     from src.models.schemas import LegalAdvice
 
     notes = state.get("trace_notes", [])
-    answer = LegalAdvice(
-        query=state["query"],
-        answer=(
+    if state.get("faithful") is False:
+        message = (
+            "I found related statutory sections but couldn't verify a fully grounded answer "
+            "from them. Try naming the specific offence or act, or rephrasing."
+        )
+    elif state.get("citation_valid") is False:
+        message = (
+            "I couldn't verify the generated citations against the retrieved statutory "
+            "sections. Try naming the specific offence or act, or rephrasing."
+        )
+    else:
+        message = (
             "I couldn't retrieve enough clearly on-point sections to answer this "
             "confidently. Try naming the specific offence or act, or rephrasing."
-        ),
+        )
+    answer = LegalAdvice(
+        query=state["query"],
+        answer=message,
         confidence="low",
         in_corpus=True,
     )
@@ -238,13 +284,20 @@ def low_confidence_node(state: AgentState) -> AgentState:
 # --- graph assembly ----------------------------------------------------------
 
 
-def build_graph():
-    """Construct and compile the StateGraph. Returns a graph with `.invoke` / `.ainvoke`.
+def build_graph(
+    *,
+    retrieval_mode: RetrievalMode = "hybrid",
+    use_reranker: bool = True,
+    pipeline: PipelineVariant = "full",
+):
+    """Construct the production graph or one fixed ablation variant.
 
-    Incremental: only the nodes that exist are wired. Each new node this week
-    adds an `add_node` + re-points a conditional edge; the routing functions
-    above already name the intended targets.
+    The three ablations deliberately skip the router, expander, OOD gate, and
+    rewriter. That leaves each downstream stage with one job to earn in the
+    RAGAS comparison: bare retrieval, then grading, then checking.
     """
+    if pipeline not in {"baseline", "grader", "checker", "full"}:
+        raise ValueError("pipeline must be baseline, grader, checker, or full")
     from src.agent.nodes.checker import checker_node
     from src.agent.nodes.citation_validator import citation_validator_node
     from src.agent.nodes.fast_path import fast_path_node
@@ -256,18 +309,50 @@ def build_graph():
     from src.agent.nodes.router import router_node
 
     builder = StateGraph(AgentState)
+    builder.add_node(
+        "retrieve",
+        lambda state: retrieve_node(state, mode=retrieval_mode, use_reranker=use_reranker),
+    )
+    builder.add_node("generator", generator_node)
+    builder.add_node("citation_validator", citation_validator_node)
+    builder.add_node("low_confidence", low_confidence_node)
+
+    if pipeline != "full":
+        builder.add_edge(START, "retrieve")
+        if pipeline == "baseline":
+            builder.add_edge("retrieve", "generator")
+        else:
+            builder.add_node("grader", grader_node)
+            builder.add_edge("retrieve", "grader")
+            builder.add_conditional_edges(
+                "grader", route_after_grader_once, ["generator", "low_confidence"]
+            )
+        builder.add_edge("generator", "citation_validator")
+        if pipeline == "checker":
+            builder.add_node("checker", checker_node)
+            builder.add_conditional_edges(
+                "citation_validator",
+                route_after_citation_to_checker_once,
+                ["checker", "low_confidence"],
+            )
+            builder.add_conditional_edges(
+                "checker", route_after_checker_once, [END, "low_confidence"]
+            )
+        else:
+            builder.add_conditional_edges(
+                "citation_validator", route_after_citation_validator_once, [END, "low_confidence"]
+            )
+        builder.add_edge("low_confidence", END)
+        return builder.compile()
+
     builder.add_node("fast_path", fast_path_node)
     builder.add_node("router", router_node)
     builder.add_node("intent_expander", intent_expander_node)
-    builder.add_node("retrieve", retrieve_node)
     builder.add_node("ood_gate", ood_gate_node)
     builder.add_node("grader", grader_node)
     builder.add_node("rewriter", rewriter_node)
-    builder.add_node("generator", generator_node)
-    builder.add_node("citation_validator", citation_validator_node)
     builder.add_node("checker", checker_node)
     builder.add_node("not_in_corpus", not_in_corpus_node)
-    builder.add_node("low_confidence", low_confidence_node)
 
     builder.add_edge(START, "fast_path")
     builder.add_conditional_edges("fast_path", route_after_fast_path, ["router", END])
@@ -299,9 +384,21 @@ def build_graph():
 _GRAPH = None
 
 
-def answer_query(query: str) -> AgentState:
+def answer_query(
+    query: str,
+    *,
+    retrieval_mode: RetrievalMode = "hybrid",
+    use_reranker: bool = True,
+    pipeline: PipelineVariant = "full",
+) -> AgentState:
     """Build the graph (cached) and run one query. Returns the final state."""
     global _GRAPH
+    if pipeline != "full" or retrieval_mode != "hybrid" or not use_reranker:
+        return build_graph(
+            retrieval_mode=retrieval_mode,
+            use_reranker=use_reranker,
+            pipeline=pipeline,
+        ).invoke({"query": query, "trace_notes": [], "iteration": 0})
     if _GRAPH is None:
         _GRAPH = build_graph()
     return _GRAPH.invoke({"query": query, "trace_notes": [], "iteration": 0})

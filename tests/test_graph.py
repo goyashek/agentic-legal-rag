@@ -24,9 +24,13 @@ from src.agent.graph import (
     build_graph,
     retrieve_node,
     route_after_checker,
+    route_after_checker_once,
+    route_after_citation_to_checker_once,
     route_after_citation_validator,
+    route_after_citation_validator_once,
     route_after_fast_path,
     route_after_grader,
+    route_after_grader_once,
     route_after_ood_gate,
     route_after_router,
 )
@@ -55,7 +59,9 @@ class _FakeRetriever:
         self._per_query = per_query
         self.calls: list[str] = []
 
-    def retrieve(self, query: str, *, top_k: int = 20) -> list[RetrievedChunk]:
+    def retrieve(
+        self, query: str, *, top_k: int = 20, mode: str = "hybrid"
+    ) -> list[RetrievedChunk]:
         self.calls.append(query)
         return self._per_query.get(query, [])
 
@@ -138,6 +144,16 @@ class TestRoutingFunctions:
             == "low_confidence"
         )
 
+    def test_ablation_routes_do_not_rewrite(self) -> None:
+        assert route_after_grader_once({"grade_pass": True}) == "generator"
+        assert route_after_grader_once({"grade_pass": False}) == "low_confidence"
+        assert route_after_citation_validator_once({"citation_valid": True}) == END
+        assert route_after_citation_validator_once({"citation_valid": False}) == "low_confidence"
+        assert route_after_citation_to_checker_once({"citation_valid": True}) == "checker"
+        assert route_after_citation_to_checker_once({"citation_valid": False}) == "low_confidence"
+        assert route_after_checker_once({"faithful": True}) == END
+        assert route_after_checker_once({"faithful": False}) == "low_confidence"
+
 
 class TestRetrieveNode:
     """Fan over sub-queries + dedupe, using fakes (no models, no key)."""
@@ -174,11 +190,44 @@ class TestRetrieveNode:
         assert retr.calls == ["punishment for murder"]
         assert out["retrieved"][0].chunk.section_id == "103"
 
+    def test_dense_mode_can_skip_reranking(self) -> None:
+        retr = _FakeRetriever(
+            {"punishment for murder": [_rc("BNS::103::0", 0.9), _rc("BNS::62::0", 0.2)]}
+        )
+        out = retrieve_node(
+            {"query": "punishment for murder"},
+            retriever=retr,
+            mode="dense",
+            use_reranker=False,
+        )
+        assert [c.chunk.section_id for c in out["retrieved"]] == ["103", "62"]
+        assert "dense" in out["trace_notes"][-1]
+        assert "rerank" not in out["trace_notes"][-1]
+
 
 class TestGraphCompiles:
     def test_build_graph_returns_compiled(self) -> None:
         g = build_graph()
         assert hasattr(g, "invoke")
+
+    @pytest.mark.parametrize(
+        ("pipeline", "expected_nodes", "absent_nodes"),
+        [
+            ("baseline", {"retrieve", "generator", "citation_validator"}, {"grader", "checker"}),
+            ("grader", {"retrieve", "grader", "generator", "citation_validator"}, {"checker"}),
+            (
+                "checker",
+                {"retrieve", "grader", "generator", "citation_validator", "checker"},
+                set(),
+            ),
+        ],
+    )
+    def test_ablation_graph_has_only_the_requested_stages(
+        self, pipeline, expected_nodes, absent_nodes
+    ) -> None:
+        nodes = set(build_graph(pipeline=pipeline).get_graph().nodes)
+        assert expected_nodes <= nodes
+        assert not (absent_nodes & nodes)
 
 
 @pytest.mark.skipif(not _have_index, reason="needs the built index (data/processed/sections.jsonl)")

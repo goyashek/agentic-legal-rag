@@ -74,9 +74,11 @@ def check_faithfulness(
 def checker_node(state: AgentState, *, client: object | None = None) -> AgentState:
     """LangGraph node. Sets `faithful`. Basically terminal: faithful -> output."""
     answer = state["answer"]
-    faithful, unsupported = check_faithfulness(
-        answer, state.get("retrieved", []), client=client
-    )
+    # Judge only the chunks supplied to generation. The larger retrieval pool can
+    # contain a section that supports a claim but was filtered out before prompting
+    # the generator.
+    generation_context = state.get("relevant_chunks") or state.get("retrieved", [])
+    faithful, unsupported = check_faithfulness(answer, generation_context, client=client)
     notes = state.get("trace_notes", [])
     return {
         "faithful": faithful,

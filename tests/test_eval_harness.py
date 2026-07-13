@@ -8,6 +8,8 @@ without a key, an index, or ragas installed. The live scoring itself runs out-of
 
 from __future__ import annotations
 
+import json
+
 from src.eval import mcq_eval, ragas_eval
 
 
@@ -28,6 +30,18 @@ class _FakeRetrieved:
 class _FakeAnswer:
     def __init__(self, answer: str) -> None:
         self.answer = answer
+
+
+class _FakeCitation:
+    def model_dump(self, *, exclude_none: bool) -> dict[str, str]:
+        assert exclude_none is True
+        return {"act": "BNS", "section_id": "103"}
+
+
+class _DetailedFakeAnswer(_FakeAnswer):
+    citations = [_FakeCitation()]
+    confidence = "high"
+    in_corpus = True
 
 
 # =============================== RAGAS =======================================
@@ -92,6 +106,57 @@ class TestCollectSamples:
             corpus=[], pace_seconds=0, sleep=sleeps.append,
         )
         assert sleeps == []
+
+    def test_saves_citations_and_answer_status_for_manual_audit(self) -> None:
+        rows = ragas_eval.collect_samples(
+            [{"query": "q", "relevant_sections": [], "difficulty": "easy"}],
+            answer_fn=lambda q: {"answer": _DetailedFakeAnswer("answer")},
+            corpus=[],
+        )
+
+        assert rows[0]["citations"] == [{"act": "BNS", "section_id": "103"}]
+        assert rows[0]["confidence"] == "high"
+        assert rows[0]["in_corpus"] is True
+
+    def test_write_samples_preserves_trace_notes(self, tmp_path) -> None:
+        rows = [{"scenario_id": "s01", "trace_notes": ["checker: faithful"]}]
+        path = tmp_path / "samples.jsonl"
+
+        ragas_eval.write_samples(rows, path)
+
+        assert '"scenario_id": "s01"' in path.read_text()
+
+    def test_write_scores_records_model_and_variant(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr("src.agent.llm._model_for", lambda tier: f"deepseek-v4-{tier}")
+        scores = ragas_eval.RagasScores(0.1, 0.2, 0.3, 0.4, 2, {"easy": {"faithfulness": 0.1}})
+        out = tmp_path / "scores.json"
+
+        ragas_eval.write_scores(
+            scores,
+            out,
+            retrieval_mode="dense",
+            use_reranker=False,
+            pipeline="baseline",
+            samples_out="data/eval/smoke.jsonl",
+        )
+
+        assert json.loads(out.read_text()) == {
+            "judge_model": "deepseek-v4-flash",
+            "control_model": "deepseek-v4-flash",
+            "answer_model": "deepseek-v4-pro",
+            "retrieval_mode": "dense",
+            "use_reranker": False,
+            "pipeline": "baseline",
+            "samples_out": "data/eval/smoke.jsonl",
+            "scores": {
+                "faithfulness": 0.1,
+                "answer_relevancy": 0.2,
+                "context_precision": 0.3,
+                "context_recall": 0.4,
+                "n_scenarios": 2,
+                "per_difficulty": {"easy": {"faithfulness": 0.1}},
+            },
+        }
 
 
 class TestAggregate:
@@ -196,7 +261,7 @@ class TestAnswerMcq:
 
 
 class _FakeRetriever:
-    def retrieve(self, query: str, *, top_k: int = 20):
+    def retrieve(self, query: str, *, top_k: int = 20, mode: str = "hybrid"):
         return [_FakeRetrieved("BNS", "103", "murder text", "Punishment for murder")]
 
 

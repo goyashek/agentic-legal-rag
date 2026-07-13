@@ -59,7 +59,7 @@ metrics use each project's own setup, so they are context rather than a leaderbo
 
 | System | Retrieval and agent loop | Grounding check | Reported evaluation |
 |---|---|---|---|
-| **This project** | BM25 + dense RRF, reranking, and a LangGraph rewrite loop | Deterministic cited-section membership check, then claim grounding check | 50-scenario retrieval set; 3-scenario RAGAS diagnostic; 60-question BhashaBench-Legal sample |
+| **This project** | Dense or hybrid retrieval with a LangGraph rewrite loop | Deterministic cited-section membership check, then claim grounding check | 50-scenario retrieval set; two full RAGAS-50 runs; 60-question BhashaBench-Legal sample |
 | **LexGrid** | Hybrid ANN + full-text RRF, reranking, exact-section bypass; single-shot | Citation format and distance threshold | 12-case suite: MRR 0.833, Recall@5 0.814, P@5 0.233, legal accuracy 0.703 |
 | **Legal Assist AI** | Dense FAISS retrieval with a prompt-based guardrail; single-shot | “I don't know” guardrail | AIBE 60.08%; BERTScore 76.9% |
 | **Indian Criminal Law RAG Agent** | Dense top-5 retrieval with a three-agent CrewAI loop | LLM grounding assessment | 20-query human evaluation: 85–90% top-5 relevance, 92% grounding |
@@ -89,28 +89,26 @@ exist in the corpus before it enters the set). Both rows use the rebuilt 1,151-c
 | hybrid + reranker (current agent) | 0.164 | 0.630 | 0.422 |
 
 The rebuilt corpus changes the original hybrid story: dense-only wins this retrieval-only set,
-and dense + reranker also beats the current hybrid + reranker row. I am **not** silently
-changing the agent default from that table alone: the complete RAGAS-50 baseline used hybrid +
-reranker, so switching the live graph needs a fresh end-to-end RAGAS run. (P@5 is low by
-construction — most scenarios have 1–3 relevant sections, capping a perfect single-answer at
-0.20.)
+and dense + reranker also beats the current hybrid + reranker row. The fresh full RAGAS runs
+below make dense without reranking the leading candidate, but the node-level ablation still
+needs to show which graph stages earn their cost. (P@5 is low by construction because most
+scenarios have one to three relevant sections, capping a perfect single-answer at 0.20.)
 
-### RAGAS (real generative task — DeepSeek Flash judge / Flash control nodes / Pro generator)
+### RAGAS (real generative task: DeepSeek Flash judge / Flash control nodes / Pro generator)
 
-Complete RAGAS-50 results are intentionally sobering. The run uses a DeepSeek Flash judge and
-local BGE-small embeddings; the agent itself uses Flash control nodes and a Pro final generator.
+Two complete RAGAS-50 runs use a DeepSeek Flash judge and local BGE-small embeddings. The agent
+uses Flash control nodes and a Pro final generator. Both numbers are low enough that this remains
+a local demo rather than a legal-answer service.
 
-| metric | value | reading |
-|---|---|---|
-| faithfulness | 0.262 | too low for a legal-facing answer system |
-| answer relevancy | 0.419 | too often misses the user's actual need |
-| context precision | 0.671 | useful, but noisy retrieved context remains |
-| context recall | 0.722 | coverage is the strongest measured part |
+| full-graph retrieval | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| dense, no reranker | 0.309 | **0.518** | 0.700 | **0.840** |
+| hybrid RRF + reranker (current default) | **0.314** | 0.386 | **0.709** | 0.732 |
 
-The earlier three-scenario BNS 303 failure is now fixed: sentence-aware repacking keeps the
-base-punishment clause together. The full run shows the remaining faithfulness and relevance
-work is broader than that single chunking defect. These are baseline numbers, not a claim of
-production legal accuracy. See [the complete RAGAS-50 record](docs/ragas-50-results.md).
+Dense has nearly the same faithfulness as hybrid, but its answer relevancy is 0.132 higher and
+its context recall is 0.108 higher. Hybrid gains only 0.005 in faithfulness and 0.010 in context
+precision. The next evaluation compares a plain dense RAG path with the grader, checker, and
+current full graph one stage at a time. See [the complete RAGAS-50 record](docs/ragas-50-results.md).
 
 ### MCQ external comparability — BhashaBench-Legal criminal slice (Cerebras `gpt-oss-120b`)
 
@@ -132,9 +130,9 @@ other model's number (different model/sample would make the comparison dishonest
 
 ### Ablations
 
-All dense, sparse, hybrid, and reranked retrieval rows are quantified above. The RAGAS table is
-the full-agent baseline for the current hybrid + reranker configuration; dense + reranker is the
-measured candidate for its next end-to-end comparison.
+All dense, sparse, hybrid, and reranked retrieval rows are quantified above. The two RAGAS rows
+are full-graph runs. A fixed node-level ablation is next, so the project can remove any stage that
+does not improve answer grounding or relevance.
 
 ### A failure handled safely
 
