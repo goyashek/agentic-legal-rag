@@ -130,9 +130,22 @@ other model's number (different model/sample would make the comparison dishonest
 
 ### Ablations
 
-All dense, sparse, hybrid, and reranked retrieval rows are quantified above. The two RAGAS rows
-are full-graph runs. A fixed node-level ablation is next, so the project can remove any stage that
-does not improve answer grounding or relevance.
+All dense, sparse, hybrid, and reranked retrieval rows are quantified above. I also ran a
+budget-limited node ablation on the same stratified random 20-scenario sample. It used dense
+retrieval without reranking, DeepSeek V4 Flash for control and judging, and V4 Pro for answers.
+
+| pipeline | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| baseline | **0.433** | **0.718** | 0.737 | 0.796 |
+| baseline + grader | 0.426 | 0.714 | **0.844** | 0.823 |
+| baseline + grader + checker | 0.186 | 0.310 | 0.789 | 0.794 |
+| current full graph | 0.341 | 0.501 | 0.778 | **0.892** |
+
+The simple baseline is the preferred production candidate. The grader improves context quality,
+but its answer-level change is small and it costs eight extra Flash calls. The checker and rewrite
+loop add recall but reduce answer grounding and relevance on this sample. This is a 20-case
+diagnostic, not a new headline score. I will hand-audit ten saved answers before changing the
+live default. See [the complete RAGAS record](docs/ragas-50-results.md).
 
 ### A failure handled safely
 

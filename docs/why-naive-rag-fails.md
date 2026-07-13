@@ -54,9 +54,11 @@ better than final answer quality, so the project still needs an ablation of its 
 
 The project has a section-labelled 50-scenario retrieval set, a complete RAGAS-50 baseline, and
 a directional 60-question BhashaBench-Legal comparison. Those are useful signals, not a claim
-of production legal accuracy. Dense, sparse, hybrid, and reranked retrieval paths are captured,
-and fresh full-graph RAGAS runs exist for dense and hybrid retrieval. A node-level ablation is
-still pending.
+of production legal accuracy. Dense, sparse, hybrid, and reranked retrieval paths are captured.
+On a fixed random 20-scenario RAGAS ablation, dense retrieval plus generation and deterministic
+citation validation scored better for faithfulness and relevancy than the fuller graph. The
+grader improved context metrics, while the checker and rewrite loop did not improve final answer
+quality. A ten-answer statute audit is the next step before changing the live default.
 
 The takeaway is deliberately small: retrieval quality, citation validity, and claim grounding
 are separate problems. A system that treats them as one prompt is harder to audit when it fails.

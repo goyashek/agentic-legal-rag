@@ -1,4 +1,4 @@
-# RAGAS-50 results
+# RAGAS results
 
 This records the two fresh runs over the 50 hand-labelled scenarios in
 `data/eval/scenarios.jsonl` (19 easy, 24 medium, 7 hard). Both runs used the
@@ -55,16 +55,45 @@ query, often returns similar context, and can fail again. The checked answer is
 then replaced with a low-confidence response even when the grader found several
 relevant sections.
 
-## Next comparison
+## 20-scenario node ablation
 
-The evaluation runner now has four fixed variants, all using dense retrieval
-without reranking:
+The full 50-case loops were too expensive to repeat for every node combination.
+I instead ran all four variants on the same 20-case stratified random sample:
+eight easy, nine medium, and three hard scenarios. The sample uses
+`random.Random(20260713)` and contains `s06, s18, s07, s29, s19, s48, s38, s45,
+s12, s37, s27, s25, s13, s50, s43, s35, s05, s17, s03, s28`.
+
+Each run used DeepSeek V4 Flash for control and judging, V4 Pro for answers,
+dense retrieval without reranking, and the same local corpus. The traces and
+score manifests record the model, sample IDs, citations, and answer status.
+
+| pipeline | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| baseline | **0.433** | **0.718** | 0.737 | 0.796 |
+| baseline + grader | 0.426 | 0.714 | **0.844** | 0.823 |
+| baseline + grader + checker | 0.186 | 0.310 | 0.789 | 0.794 |
+| current full graph | 0.341 | 0.501 | 0.778 | **0.892** |
+
+The variants are:
 
 1. `baseline`: retrieve, generate, then validate citations.
 2. `grader`: baseline plus the relevance grader.
 3. `checker`: grader plus the faithfulness checker, without query retries.
 4. `full`: the existing router, expander, OOD gate, checker, and rewrite loop.
 
-New traces save the structured citations, confidence, and in-corpus flag. That
-makes a ten-answer statute audit possible before relying on either Flash-based
-judge to decide the production graph.
+The deterministic citation validator accepted all 20 generated answers in both
+the baseline and grader runs. The checker-only path marked 11 of 20 answers
+unfaithful and returned low confidence for each. The full graph made 39 answer
+attempts, received 25 unfaithful verdicts, rewrote the query 19 times, and still
+ended low confidence for six scenarios.
+
+The baseline has the best answer-level scores. The grader has almost the same
+faithfulness and relevancy while improving the retrieved context metrics, but it
+adds eight Flash calls per query. The full graph reaches more context, but its
+extra steps reduce faithfulness and relevancy below the simple baseline.
+
+This is a small, judge-based comparison, so it does not justify a silent default
+switch. The next non-paid step is a hand audit of ten saved baseline and full
+answers against their cited statute text. Until then, dense baseline is the
+preferred production candidate and the checker-rewriter loop remains an
+experimental safety path rather than a demonstrated quality improvement.
