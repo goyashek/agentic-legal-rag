@@ -76,7 +76,7 @@ def _ragas_evaluator():
     from ragas.embeddings import HuggingFaceEmbeddings
     from ragas.llms import LangchainLLMWrapper
 
-    from src.agent.llm import _max_tokens_for, _model_for, _resolve_key
+    from src.agent.llm import _max_tokens_for, _model_for, _resolve_key, _timeout_seconds
 
     judge = ChatOpenAI(
         model=_model_for("flash"),
@@ -84,6 +84,8 @@ def _ragas_evaluator():
         api_key=_resolve_key(),
         temperature=0,
         max_tokens=_max_tokens_for("flash"),
+        timeout=_timeout_seconds(),
+        max_retries=0,
         extra_body={"thinking": {"type": "disabled"}},
     )
     return (

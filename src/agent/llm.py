@@ -20,6 +20,7 @@ _MODELS: dict[Tier, str] = {"flash": "deepseek-v4-flash", "pro": "deepseek-v4-pr
 # Safe ceilings for the Pydantic schemas used here: compact control-plane calls
 # get 256 tokens; the user-facing cited answer gets 1024.
 _MAX_TOKENS: dict[Tier, int] = {"flash": 256, "pro": 1024}
+_DEFAULT_TIMEOUT_SECONDS = 90.0
 _SYNC_CLIENTS: dict[Tier, object] = {}
 
 
@@ -62,8 +63,17 @@ def _max_tokens_for(tier: Tier) -> int:
     return value
 
 
+def _timeout_seconds() -> float:
+    """Return a positive request limit instead of inheriting the SDK's 10 minutes."""
+    _load_env()
+    value = float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", _DEFAULT_TIMEOUT_SECONDS))
+    if value <= 0:
+        raise ValueError("DEEPSEEK_TIMEOUT_SECONDS must be positive")
+    return value
+
+
 class _ClientWrapper:
-    """Inject DeepSeek's model, non-thinking mode, and output ceiling once."""
+    """Inject DeepSeek's model, non-thinking mode, and bounded retry policy once."""
 
     def __init__(self, client, model: str, max_tokens: int, is_async: bool) -> None:
         self._client = client
@@ -74,6 +84,7 @@ class _ClientWrapper:
     def create(self, **kwargs):
         kwargs.setdefault("model", self._model)
         kwargs.setdefault("max_tokens", self._max_tokens)
+        kwargs.setdefault("max_retries", 0)
         kwargs.setdefault("extra_body", {"thinking": {"type": "disabled"}})
         if self._is_async:
             return self._acreate(**kwargs)
@@ -103,15 +114,18 @@ def get_client(tier: Tier = "flash", *, async_client: bool = False):
     key = _resolve_key()
     model = _model_for(tier)
     max_tokens = _max_tokens_for(tier)
+    timeout = _timeout_seconds()
     base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     if async_client:
         raw = instructor.from_openai(
-            AsyncOpenAI(base_url=base_url, api_key=key), mode=instructor.Mode.TOOLS
+            AsyncOpenAI(base_url=base_url, api_key=key, timeout=timeout, max_retries=0),
+            mode=instructor.Mode.TOOLS,
         )
         return _ClientWrapper(raw, model, max_tokens, is_async=True)
     if tier not in _SYNC_CLIENTS:
         raw = instructor.from_openai(
-            OpenAI(base_url=base_url, api_key=key), mode=instructor.Mode.TOOLS
+            OpenAI(base_url=base_url, api_key=key, timeout=timeout, max_retries=0),
+            mode=instructor.Mode.TOOLS,
         )
         _SYNC_CLIENTS[tier] = _ClientWrapper(raw, model, max_tokens, is_async=False)
     return _SYNC_CLIENTS[tier]

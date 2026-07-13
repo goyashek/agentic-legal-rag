@@ -20,6 +20,7 @@ def _isolate(monkeypatch):
         "DEEPSEEK_MODEL_PRO",
         "DEEPSEEK_MAX_TOKENS_FLASH",
         "DEEPSEEK_MAX_TOKENS_PRO",
+        "DEEPSEEK_TIMEOUT_SECONDS",
     ):
         monkeypatch.delenv(var, raising=False)
     llm._SYNC_CLIENTS.clear()
@@ -43,6 +44,18 @@ def test_non_positive_token_ceiling_is_rejected(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_MAX_TOKENS_FLASH", "0")
     with pytest.raises(ValueError, match="must be positive"):
         llm._max_tokens_for("flash")
+
+
+def test_timeout_defaults_to_90_seconds_and_can_be_overridden(monkeypatch) -> None:
+    assert llm._timeout_seconds() == 90.0
+    monkeypatch.setenv("DEEPSEEK_TIMEOUT_SECONDS", "12.5")
+    assert llm._timeout_seconds() == 12.5
+
+
+def test_non_positive_timeout_is_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match="must be positive"):
+        llm._timeout_seconds()
 
 
 def test_key_gating(monkeypatch) -> None:
@@ -89,15 +102,22 @@ def test_wrapper_injects_cost_controls() -> None:
     assert client.create(messages=[]) == "ok"
     assert raw.kwargs["model"] == "deepseek-v4-flash"
     assert raw.kwargs["max_tokens"] == 256
+    assert raw.kwargs["max_retries"] == 0
     assert raw.kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 def test_wrapper_preserves_explicit_request_controls() -> None:
     raw = _Recorder()
     client = llm._ClientWrapper(raw, "default", 256, is_async=False)
-    client.create(model="override", max_tokens=42, extra_body={"thinking": {"type": "enabled"}})
+    client.create(
+        model="override",
+        max_tokens=42,
+        max_retries=2,
+        extra_body={"thinking": {"type": "enabled"}},
+    )
     assert raw.kwargs["model"] == "override"
     assert raw.kwargs["max_tokens"] == 42
+    assert raw.kwargs["max_retries"] == 2
     assert raw.kwargs["extra_body"] == {"thinking": {"type": "enabled"}}
 
 
