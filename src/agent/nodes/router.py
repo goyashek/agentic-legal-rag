@@ -1,4 +1,4 @@
-"""Query router. Gemini Flash classifier that runs once the fast path misses.
+"""Query router. DeepSeek Flash classifier that runs once the fast path misses.
 
 Sorts the query into one of three routes:
   criminal            -> go on to intent expansion + retrieval
@@ -40,7 +40,7 @@ class RouteDecision(BaseModel):
 
 
 def classify(query: str, *, client: object | None = None) -> Route:
-    """Return the route for a query. Gemini Flash, temperature 0 so it's stable.
+    """Return the route for a query. DeepSeek Flash, temperature 0 so it's stable.
 
     `client` is any object with `.create(messages=..., response_model=...)`
     returning a RouteDecision — the real instructor client by default, a fake in

@@ -250,7 +250,7 @@ class TestRouterUnit:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+@pytest.mark.skipif(not has_api_key(), reason="needs DEEPSEEK_API_KEY for a live DeepSeek call")
 class TestRouterLive:
     """A few live Flash calls to confirm the prompt actually classifies right."""
 
@@ -293,7 +293,7 @@ class TestIntentExpanderUnit:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+@pytest.mark.skipif(not has_api_key(), reason="needs DEEPSEEK_API_KEY for a live DeepSeek call")
 class TestIntentExpanderLive:
     def test_multi_offence_narrative_expands(self) -> None:
         subs = expand_intent("someone broke into my house at night and stole my laptop")
@@ -527,7 +527,7 @@ class TestCheckerUnit:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+@pytest.mark.skipif(not has_api_key(), reason="needs DEEPSEEK_API_KEY for a live DeepSeek call")
 class TestGraderRewriterLive:
     def test_grader_keeps_relevant_drops_off_topic(self) -> None:
         # a real murder section is relevant to a murder query; a theft section is not

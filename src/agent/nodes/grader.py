@@ -1,7 +1,7 @@
 """Relevance grader. LLM-as-judge over the retrieved chunks, run in parallel.
 
 Grades each reranked chunk yes/no on whether it's actually relevant to the query
-(Gemini Flash, fired concurrently). If >= 3 chunks pass I move on to generation;
+(DeepSeek Flash, fired concurrently). If >= 3 chunks pass I move on to generation;
 if not, the graph kicks over to the rewriter for another retrieval loop (budget 2).
 
 The point is to stop generation from reasoning over context that's only

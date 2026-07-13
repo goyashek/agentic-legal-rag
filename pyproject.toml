@@ -3,7 +3,7 @@ name = "agentic-legal-rag"
 version = "0.1.0"
 description = "Agentic, self-correcting RAG for Indian criminal law (BNS/BNSS/BSA) with hybrid retrieval, a deterministic citation validator, and dual evaluation."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
 
 # core deps. lower bounds are documented in NOTES.md.
@@ -12,7 +12,7 @@ dependencies = [
     # --- agent orchestration ---
     "langgraph>=0.2",
     "langchain-core>=0.3",
-    "langchain-google-genai>=2.0",   # Gemini 2.5 Flash/Pro (D2)
+    "langchain-openai>=0.2",         # DeepSeek judge through its OpenAI-compatible API
     # --- ingestion / chunking ---
     "chonkie[qdrant,model2vec,st]>=0.4",  # SemanticChunker + native QdrantHandshake. model2vec = potion-base-8M backbone (locked stack; without it Chonkie silently falls back to a sentence-transformer). st = fallback embeddings.
     "pymupdf>=1.24",                 # gazette PDF parsing
@@ -22,7 +22,7 @@ dependencies = [
     "sentence-transformers>=3.0",    # bge-large-en-v1.5 embeddings + bge-reranker-base
     # --- structured output ---
     "pydantic>=2.9",
-    "instructor[google-genai]>=1.6",  # google-genai extra pulls jsonref, required for Gemini structured output
+    "instructor>=1.6",
     # --- eval ---
     "ragas>=0.2",                    # RAGAS 50-scenario diagnostics
     "datasets>=3.0",                 # load AIBE / BhashaBench slices from HuggingFace
@@ -60,10 +60,10 @@ select = ["E", "F", "I", "UP", "B"]   # pycodestyle, pyflakes, isort, pyupgrade,
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# Live tests hit real Gemini (quota + RPM limits), so exclude them by default:
+# Live tests hit DeepSeek, so exclude them by default:
 # the full suite runs keyless and quota-free. Opt in with `pytest -m live` (needs a
 # key in .env) — pace those runs against the flash-tier RPM cap. See NOTES.md.
 addopts = "-m 'not live'"
 markers = [
-    "live: test makes a real Gemini API call (opt-in; excluded by default)",
+    "live: test makes a real DeepSeek API call (opt-in; excluded by default)",
 ]

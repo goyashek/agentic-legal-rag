@@ -2,14 +2,14 @@
 
 A common legal failure: "someone broke into my house and stole my phone" involves
 house-trespass and theft, but top-k on the single query won't surface both. This node
-(Gemini Flash) pulls out the distinct offences and emits 3-5 parallel sub-queries, one
+(DeepSeek Flash) pulls out the distinct offences and emits 3-5 parallel sub-queries, one
 per offence. The retriever runs per sub-query and results get deduped.
 
 This is my fix for the cross-sectional reasoning problem, and the part that took me the
 longest to get right. Runs after the router classifies the query as `criminal`.
 
 Client is injected (defaults to the shared Flash client) so node logic is
-unit-testable with a fake client at zero quota; live-Gemini tests gate on the key.
+unit-testable with a fake client at zero quota; live tests gate on the DeepSeek key.
 """
 
 from __future__ import annotations

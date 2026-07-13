@@ -8,12 +8,12 @@ Prompt files (✅ = written):
 
 | File | Node | Model | Job |
 |---|---|---|---|
-| ✅ `router.txt` | router | Gemini Flash | 3-way classify: criminal / out_of_scope / needs_clarification |
-| ✅ `intent_expander.txt` | intent_expander | Gemini Flash | narrative to 3-5 offence sub-queries |
-| ✅ `grader.txt` | grader | Gemini Flash | per-chunk relevance yes/no |
-| ✅ `rewriter.txt` | rewriter | Gemini Flash | HyDE / targeted rewrite (by reason) |
-| ✅ `generator.txt` | generator | Gemini Pro* | cited LegalAdvice, cite only from provided chunks (*Pro has no free tier — runs on flash-lite via GEMINI_MODEL_PRO until billing) |
-| ✅ `checker.txt` | checker | Gemini Flash | claim-vs-source faithfulness judge |
+| ✅ `router.txt` | router | DeepSeek V4 Flash | 3-way classify: criminal / out_of_scope / needs_clarification |
+| ✅ `intent_expander.txt` | intent_expander | DeepSeek V4 Flash | narrative to 3-5 offence sub-queries |
+| ✅ `grader.txt` | grader | DeepSeek V4 Flash | per-chunk relevance yes/no |
+| ✅ `rewriter.txt` | rewriter | DeepSeek V4 Flash | HyDE / targeted rewrite (by reason) |
+| ✅ `generator.txt` | generator | DeepSeek V4 Pro | cited LegalAdvice, cite only from provided chunks |
+| ✅ `checker.txt` | checker | DeepSeek V4 Flash | claim-vs-source faithfulness judge |
 
 All prompts are loaded via `src/agent/llm.py::load_prompt(name)` (reads `<name>.txt`,
 uncached so tuning shows up in eval). The `{query}` / context placeholders get

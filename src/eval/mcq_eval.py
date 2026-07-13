@@ -78,7 +78,7 @@ class MCQResult:
     criminal_slice_size: int
     bridge_resolved: int          # questions whose repealed-IPC refs mapped to BNS
     bridge_accuracy: float        # accuracy on just the bridge-dependent subset
-    baseline_accuracy: float | None = None   # same questions, no-RAG Gemini for comparison
+    baseline_accuracy: float | None = None   # same questions, no-RAG model for comparison
     # no-RAG on the bridge subset — the head-to-head that matters
     baseline_bridge_accuracy: float | None = None
 
@@ -205,7 +205,7 @@ def answer_mcq(
 
 
 def answer_mcq_no_rag(question: str, options: list[str], *, client=None) -> int:
-    """No-RAG baseline: same model, same clamping, NO retrieval — Gemini answers from its
+    """No-RAG baseline: same model, same clamping, NO retrieval — DeepSeek answers from its
     own parametric knowledge. This is the comparison that shows RAG's lift; pass it as
     `baseline_fn` so one paced run scores system + baseline together (don't burn the RPD
     cap on two separate runs). Signature-compatible with `answer_mcq` for the runner.

@@ -15,9 +15,8 @@ Two things I insulate against on purpose:
   - Chonkie's constructor arg is `threshold`; I expose `similarity_threshold` as my
     own public name and map it, so a Chonkie API rename doesn't ripple out here
     (Chonkie is young; NOTES.md "keep frameworks swappable").
-  - The summariser is injectable. Default is a deterministic, key-free heading anchor
-    so chunking runs in CI without secrets; the Gemini one-liner (`summarize_section`)
-    is wired in only when a key exists. "Swap it without touching chunking."
+  - The summariser is injectable. The default is a deterministic, key-free heading
+    anchor, so index builds do not spend LLM tokens.
 """
 
 from __future__ import annotations
@@ -59,8 +58,7 @@ def _heading_summary(_text: str, heading: str) -> str:
     """Default key-free summary: the section heading is a decent parent anchor.
 
     It's what a lawyer skims to place a passage, and it needs no LLM call, so
-    chunking stays reproducible in CI. `summarize_section` upgrades this when a
-    Gemini key is available.
+    chunking stays reproducible in CI.
     """
     return heading.strip().rstrip(".")
 
@@ -126,33 +124,6 @@ def chunk_sections(
                 )
             )
     return chunks
-
-
-def summarize_section(text: str, heading: str) -> str:
-    """One-sentence summary of a section, prepended to its chunks (Gemini Flash).
-
-    Kept separate so I can cache/batch it and swap it without touching chunking.
-    Needs GOOGLE_API_KEY / GEMINI_API_KEY; raises if absent so a missing key fails
-    loudly here rather than silently degrading the index.
-    """
-    import os
-
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
-    if not (os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")):
-        raise RuntimeError(
-            "summarize_section needs GOOGLE_API_KEY/GEMINI_API_KEY. Use the default "
-            "heading summariser for a key-free run."
-        )
-
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-    prompt = (
-        "Summarise this Indian statutory section in ONE plain-language sentence "
-        "(what it governs, no citation). Section heading: "
-        f"{heading!r}.\n\nSection text:\n{text[:4000]}"
-    )
-    resp = llm.invoke(prompt)
-    return str(resp.content).strip().replace("\n", " ")
 
 
 def write_chunks_jsonl(chunks: Iterable[LegalChunk], path: str | Path) -> int:

@@ -1,10 +1,6 @@
-"""Answer generator. Pydantic-constrained cited advice via instructor.
+"""Answer generator. Pydantic-constrained cited advice via DeepSeek Pro.
 
-Builds the LegalAdvice output from the graded chunks. D2 locked Gemini Pro for
-this, wired through `get_client("pro")` — but Pro has no free-tier quota, so on a
-key-only run GEMINI_MODEL_PRO points at flash-lite (deviation recorded in NOTES /
-PROJECT / .env). The code stays model-agnostic: swap the env var back to
-gemini-2.5-pro once billing is on, no code change.
+Builds the LegalAdvice output from the graded chunks through `get_client("pro")`.
 
 instructor returns citations as structured (act, section_id) pairs the
 deterministic citation validator (Fri) checks exactly. The prompt forbids citing

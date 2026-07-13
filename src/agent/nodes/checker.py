@@ -2,7 +2,7 @@
 
 The deterministic citation validator (citation_validator.py) already guaranteed
 every cited section was actually retrieved. This node catches the subtler failure:
-claims that paraphrase or overstate what the cited sections really say. Gemini
+claims that paraphrase or overstate what the cited sections really say. DeepSeek
 Flash judges each claim against the text it cites.
 
 If it comes back "unfaithful", route back to the rewriter/generator, as long as

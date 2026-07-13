@@ -39,9 +39,9 @@ _TODO: comparison table (from `analysis.md` §2)._
 
 ## Evaluation
 
-Every number below is labeled with the model that produced it. Runs on alternate backends
-(Cerebras GPT-OSS, DeepSeek) are reported as that model, never relabeled as the default —
-auditability is a first-class goal here, so the eval record stays honest about provenance.
+Every number below is labeled with the model that produced it. Historical runs stay labeled
+with their actual model; current development and future runs use DeepSeek. Auditability is a
+first-class goal here, so the eval record stays honest about provenance.
 
 ### Retrieval (pure, model-agnostic — no LLM)
 
@@ -111,7 +111,7 @@ system run are the remaining ablations (see `NOTES.md` for status).
 _TODO: verify once implemented._
 
 ```bash
-cp .env.example .env        # fill in GEMINI_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
+cp .env.example .env        # fill in DEEPSEEK_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
 pip install -e ".[dev]"     # or: uv sync
 # 1. add BNS/BNSS/BSA PDFs to data/raw/  (see Data & licensing)
 # 2. build the index:  python -m src.retrieval.index

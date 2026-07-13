@@ -6,7 +6,7 @@ Layers:
   - fast-path e2e: keyless — a "BNS 103" query hits the deterministic fast path
     and ends without any LLM call, exercising the real StateGraph. Needs the
     built index (data/processed/sections.jsonl), so it skips when that's absent.
-  - criminal-branch e2e: live Gemini (router + expander) + real retrieval; gated
+  - criminal-branch e2e: live DeepSeek (router + expander) + real retrieval; gated
     on both the key and the index.
 """
 
@@ -200,7 +200,7 @@ class TestFastPathEndToEnd:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not has_api_key(), reason="needs GEMINI_API_KEY for a live Gemini call")
+@pytest.mark.skipif(not has_api_key(), reason="needs DEEPSEEK_API_KEY for a live DeepSeek call")
 class TestRouterEndToEnd:
     """Narrative query misses the fast path and flows through the live router."""
 
@@ -214,7 +214,7 @@ class TestRouterEndToEnd:
 @pytest.mark.live
 @pytest.mark.skipif(
     not (_have_full_index and has_api_key()),
-    reason="needs both the built Qdrant index and GEMINI_API_KEY",
+    reason="needs both the built Qdrant index and DEEPSEEK_API_KEY",
 )
 class TestCriminalBranchEndToEnd:
     """Full criminal path: router -> intent_expander -> retrieve -> ood_gate."""
