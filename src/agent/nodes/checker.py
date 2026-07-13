@@ -26,9 +26,6 @@ class FaithfulnessVerdict(BaseModel):
     """Structured faithfulness verdict. `instructor` forces the model to fill this."""
 
     faithful: bool = Field(description="True only if every claim is backed by the cited text")
-    unsupported_claims: list[str] = Field(
-        default_factory=list, description="Claims not backed by the cited section text"
-    )
 
 
 def _cited_context(answer: LegalAdvice, chunks: list[RetrievedChunk]) -> str:
@@ -57,8 +54,9 @@ def check_faithfulness(
 ) -> tuple[bool, list[str]]:
     """Judge whether every claim is actually backed by its cited source text.
 
-    Returns (faithful, unsupported_claims). faithful is True only when nothing is
-    unsupported. Runs after citations are already structurally valid.
+    Returns the verdict plus an empty compatibility list. The graph routes only on
+    the boolean, so asking for arbitrary claim excerpts wastes tokens and can make
+    a short structured response exceed its output limit.
     """
     client = client or get_client("flash")
     prompt = load_prompt("checker").format(
@@ -68,11 +66,9 @@ def check_faithfulness(
         messages=[{"role": "user", "content": prompt}],
         response_model=FaithfulnessVerdict,
         temperature=0,
-        # A verdict can carry several unsupported-claim excerpts; 256 truncated a
-        # real tool response during RAGAS. Keep this exception local to the checker.
-        max_tokens=512,
+        max_tokens=256,
     )
-    return (verdict.faithful, verdict.unsupported_claims)
+    return (verdict.faithful, [])
 
 
 def checker_node(state: AgentState, *, client: object | None = None) -> AgentState:

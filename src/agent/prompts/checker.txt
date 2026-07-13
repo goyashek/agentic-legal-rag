@@ -14,7 +14,6 @@ is fine and counts as faithful.
 
 Return the structured verdict:
 - faithful: true only if every substantive claim is supported by the cited text.
-- unsupported_claims: the specific claims that aren't backed (empty if faithful).
 
 Answer under review:
 {answer}

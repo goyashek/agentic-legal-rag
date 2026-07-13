@@ -121,15 +121,14 @@ class _FakeGeneratorClient:
 class _FakeCheckerClient:
     """Returns a canned faithfulness verdict. Records the rendered prompt. Zero quota."""
 
-    def __init__(self, faithful: bool, unsupported: list[str] | None = None) -> None:
+    def __init__(self, faithful: bool) -> None:
         self._faithful = faithful
-        self._unsupported = unsupported or []
         self.calls: list[dict] = []
 
     def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
         self.calls.append({"messages": messages, "response_model": response_model, **kwargs})
         assert response_model is FaithfulnessVerdict
-        return FaithfulnessVerdict(faithful=self._faithful, unsupported_claims=self._unsupported)
+        return FaithfulnessVerdict(faithful=self._faithful)
 
 
 # A tiny IPC->BNS map so the IPC-normalization tests don't need the real PDF.
@@ -503,14 +502,14 @@ class TestCheckerUnit:
         faithful, unsupported = check_faithfulness(adv, [_chunk("103")], client=fake)
         assert faithful is True
         assert unsupported == []
-        assert fake.calls[0]["max_tokens"] == 512
+        assert fake.calls[0]["max_tokens"] == 256
 
-    def test_unfaithful_verdict_lists_claims(self) -> None:
+    def test_unfaithful_verdict(self) -> None:
         adv = _advice([("BNS", "103")], answer="Murder carries a mandatory death sentence.")
-        fake = _FakeCheckerClient(faithful=False, unsupported=["mandatory death sentence"])
+        fake = _FakeCheckerClient(faithful=False)
         faithful, unsupported = check_faithfulness(adv, [_chunk("103")], client=fake)
         assert faithful is False
-        assert "mandatory death sentence" in unsupported
+        assert unsupported == []
 
     def test_context_uses_only_cited_sections(self) -> None:
         adv = _advice([("BNS", "103")])
