@@ -326,20 +326,20 @@ class TestGraderUnit:
         assert grade_chunks("anything", [], client=fake) == []
         assert fake.n_calls == 0
 
-    def test_node_grade_pass_true_at_three(self) -> None:
+    def test_node_grade_pass_true_with_one_relevant_section(self) -> None:
         chunks = [_chunk("103"), _chunk("303"), _chunk("318")]
-        fake = _FakeAsyncGraderClient({}, default=True)  # all relevant
+        fake = _FakeAsyncGraderClient({"103": True}, default=False)
         out = grader_node({"query": "q", "retrieved": chunks}, client=fake)
         assert out["grade_pass"] is True
-        assert len(out["relevant_chunks"]) == 3
+        assert len(out["relevant_chunks"]) == 1
 
-    def test_node_grade_pass_false_below_three(self) -> None:
+    def test_node_grade_pass_false_without_relevant_sections(self) -> None:
         chunks = [_chunk("103"), _chunk("303"), _chunk("318")]
-        fake = _FakeAsyncGraderClient({"103": True, "303": True}, default=False)  # only 2
+        fake = _FakeAsyncGraderClient({}, default=False)
         out = grader_node({"query": "q", "retrieved": chunks}, client=fake)
         assert out["grade_pass"] is False
-        assert len(out["relevant_chunks"]) == 2
-        assert any("grader: 2 relevant -> rewrite" in n for n in out["trace_notes"])
+        assert len(out["relevant_chunks"]) == 0
+        assert any("grader: 0 relevant -> rewrite" in n for n in out["trace_notes"])
 
 
 class TestRewriterUnit:
@@ -502,6 +502,7 @@ class TestCheckerUnit:
         faithful, unsupported = check_faithfulness(adv, [_chunk("103")], client=fake)
         assert faithful is True
         assert unsupported == []
+        assert fake.calls[0]["max_tokens"] == 512
 
     def test_unfaithful_verdict_lists_claims(self) -> None:
         adv = _advice([("BNS", "103")], answer="Murder carries a mandatory death sentence.")

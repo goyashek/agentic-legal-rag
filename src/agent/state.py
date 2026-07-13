@@ -37,7 +37,7 @@ class AgentState(TypedDict, total=False):
 
     # --- grading ---
     relevant_chunks: list[RetrievedChunk]   # chunks the grader marked "yes"
-    grade_pass: bool                        # >= 3 relevant
+    grade_pass: bool                        # at least one relevant chunk
 
     # --- generation ---
     answer: LegalAdvice | None

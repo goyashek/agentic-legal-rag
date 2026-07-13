@@ -1,8 +1,8 @@
 """Relevance grader. LLM-as-judge over the retrieved chunks, run in parallel.
 
 Grades each reranked chunk yes/no on whether it's actually relevant to the query
-(DeepSeek Flash, fired concurrently). If >= 3 chunks pass I move on to generation;
-if not, the graph kicks over to the rewriter for another retrieval loop (budget 2).
+(DeepSeek Flash, fired concurrently). If any chunk passes I move on to generation;
+if none do, the graph kicks over to the rewriter for another retrieval loop (budget 2).
 
 The point is to stop generation from reasoning over context that's only
 marginally on-topic. That's one of the quiet ways single-shot RAG gives you a
@@ -25,9 +25,9 @@ from src.agent.llm import get_client, load_prompt
 from src.agent.state import AgentState
 from src.retrieval.hybrid import RetrievedChunk
 
-# grade_pass threshold: proceed to generation only when at least this many chunks
-# are judged relevant, else rewrite + re-retrieve. Matches the architecture (>= 3).
-MIN_RELEVANT = 3
+# The grader filters noise; it is not a completeness test. One complete statutory
+# section can answer a narrow question such as theft, especially after chunk repair.
+MIN_RELEVANT = 1
 
 # Cap concurrent grade calls so a wide candidate set can't burst past the flash-tier
 # RPM limit. 8 reranked chunks sit under it, but the semaphore keeps it safe if the
@@ -90,7 +90,7 @@ def grade_chunks(
 
 
 def grader_node(state: AgentState, *, client: object | None = None) -> AgentState:
-    """LangGraph node. Sets relevant_chunks + grade_pass (True when >= 3 relevant)."""
+    """LangGraph node. Sets relevant_chunks + grade_pass when any chunk is relevant."""
     relevant = grade_chunks(state["query"], state.get("retrieved", []), client=client)
     grade_pass = len(relevant) >= MIN_RELEVANT
     notes = state.get("trace_notes", [])

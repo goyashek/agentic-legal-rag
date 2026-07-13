@@ -68,6 +68,9 @@ def check_faithfulness(
         messages=[{"role": "user", "content": prompt}],
         response_model=FaithfulnessVerdict,
         temperature=0,
+        # A verdict can carry several unsupported-claim excerpts; 256 truncated a
+        # real tool response during RAGAS. Keep this exception local to the checker.
+        max_tokens=512,
     )
     return (verdict.faithful, verdict.unsupported_claims)
 

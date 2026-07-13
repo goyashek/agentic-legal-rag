@@ -11,8 +11,8 @@ Flow I settled on (target — built incrementally across Week 2):
     intent_expander → retrieve → ood_gate (ood) ..► END ("not in corpus")
         │ in-domain
         ▼
-    grader (< 3 relevant) → rewriter (within budget) → retrieve
-        │ >= 3 relevant             (budget hit) → END (confidence=low)
+    grader (no relevant chunk) → rewriter (within budget) → retrieve
+        │ relevant chunk             (budget hit) → END (confidence=low)
         ▼
     generator → citation_validator (invalid) → rewriter (loop)
         │ valid
@@ -78,7 +78,7 @@ def route_after_ood_gate(state: AgentState) -> str:
 
 
 def route_after_grader(state: AgentState) -> str:
-    """>= 3 relevant -> generation; else rewrite + re-retrieve until the budget runs out.
+    """Any relevant chunk -> generation; else rewrite + re-retrieve until the budget runs out.
 
     iteration counts rewrites done so far (rewriter bumps it). While it's below the
     budget we loop back through the rewriter; once it's spent we stop with a

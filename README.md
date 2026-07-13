@@ -27,7 +27,7 @@ flowchart TD
     H --> X[Cross-encoder reranker]
     X --> O{In corpus?}
     O -->|no| A3[Low-confidence corpus response]
-    O -->|yes| G{At least 3 relevant chunks?}
+    O -->|yes| G{Any relevant chunk?}
     G -->|yes| N[Generate cited answer]
     G -->|no, budget left| W[Rewrite query]
     W --> H

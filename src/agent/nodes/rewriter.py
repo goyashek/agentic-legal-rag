@@ -1,6 +1,6 @@
 """Query rewriter (HyDE-style). The re-retrieval arm of the self-correction loop.
 
-Fires when the grader fails (< 3 relevant chunks) or the citation validator
+Fires when the grader finds no relevant chunks or the citation validator
 rejects a made-up citation. It rewrites/expands the query (a HyDE-style
 hypothetical answer, or a targeted rephrase aimed at the bad citation) and then
 retrieval runs again.
