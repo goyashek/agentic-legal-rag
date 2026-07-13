@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from src.retrieval.hybrid import reciprocal_rank_fusion
-from src.retrieval.index import point_id_for, tokenize
+from src.retrieval.index import point_id_for, rebuild_local_index, tokenize
 
 PROCESSED = Path(__file__).resolve().parent.parent / "data" / "processed"
 QDRANT_DIR = PROCESSED / "qdrant"
@@ -77,6 +77,11 @@ class TestPointId:
 
     def test_distinct_ids_differ(self) -> None:
         assert point_id_for("BNS::103::0") != point_id_for("BNS::103::1")
+
+
+def test_rebuild_requires_all_source_pdfs(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="bns.pdf"):
+        rebuild_local_index(raw_dir=tmp_path)
 
 
 @pytest.mark.skipif(

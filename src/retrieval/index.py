@@ -11,6 +11,7 @@ real server instead (that's what docker-compose wires up for deploy).
 
 from __future__ import annotations
 
+import argparse
 import json
 import pickle
 import re
@@ -146,3 +147,59 @@ def build_bm25_index(chunks: list[LegalChunk], *, out_path: str | Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("wb") as f:
         pickle.dump({"bm25": bm25, "chunk_ids": [c.chunk_id for c in chunks]}, f)
+
+
+def rebuild_local_index(
+    *, raw_dir: str | Path = "data/raw", processed_dir: str | Path = "data/processed"
+) -> tuple[int, int]:
+    """Parse local source PDFs and replace the generated chunks and indices."""
+    from src.ingest.chunk_chonkie import chunk_sections, write_chunks_jsonl
+    from src.ingest.enrich_metadata import enrich
+    from src.ingest.parse_pdf import PUBLISHED_SECTION_COUNTS, parse_statute, verify_section_counts
+
+    raw_dir = Path(raw_dir)
+    processed_dir = Path(processed_dir)
+    statute_pdfs = {act: raw_dir / f"{act.lower()}.pdf" for act in ("BNS", "BNSS", "BSA")}
+    comparison_pdf = raw_dir / "COMPARISON SUMMARY BNS to IPC .pdf"
+    missing = [str(path) for path in (*statute_pdfs.values(), comparison_pdf) if not path.exists()]
+    if missing:
+        raise FileNotFoundError("Missing source PDFs: " + ", ".join(missing))
+
+    sections = [
+        section
+        for act, pdf in statute_pdfs.items()
+        for section in parse_statute(pdf, act)
+    ]
+    deltas = verify_section_counts(sections, PUBLISHED_SECTION_COUNTS)
+    if any(deltas.values()):
+        raise ValueError(f"Published section-count check failed: {deltas}")
+
+    chunks = chunk_sections(sections)
+    enrich(
+        chunks,
+        bnss_pdf=statute_pdfs["BNSS"],
+        comparison_pdf=comparison_pdf,
+        chapter_title_pdfs=statute_pdfs,
+    )
+    write_chunks_jsonl(chunks, processed_dir / "sections.jsonl")
+    build_qdrant_index(
+        chunks,
+        collection="legal",
+        qdrant_path=processed_dir / "qdrant",
+        recreate=True,
+    )
+    build_bm25_index(chunks, out_path=processed_dir / "bm25.pkl")
+    return len(sections), len(chunks)
+
+
+def main(argv: list[str] | None = None) -> None:  # pragma: no cover - thin CLI wrapper
+    parser = argparse.ArgumentParser(description="Rebuild the local legal retrieval index")
+    parser.add_argument("--raw-dir", default="data/raw")
+    parser.add_argument("--processed-dir", default="data/processed")
+    args = parser.parse_args(argv)
+    sections, chunks = rebuild_local_index(raw_dir=args.raw_dir, processed_dir=args.processed_dir)
+    print(f"Built {chunks} chunks from {sections} sections.")
+
+
+if __name__ == "__main__":
+    main()

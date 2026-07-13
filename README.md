@@ -145,13 +145,13 @@ then rewrites and retrieves again, or returns low confidence once the two-attemp
 
 ## Local setup
 
-Docker packaging is deferred. The API and frontend run locally once the private, git-ignored
-corpus artifacts already exist under `data/processed/` (`sections.jsonl`, `bm25.pkl`, and the
-embedded Qdrant store). The repository does not yet expose index creation as a supported CLI.
+Docker packaging is deferred. Put the source PDFs named in Data & licensing under `data/raw/`;
+the local command below regenerates the git-ignored corpus artifacts under `data/processed/`.
 
 ```bash
 cp .env.example .env        # fill in DEEPSEEK_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
 uv sync --all-extras
+uv run python -m src.retrieval.index
 uv run uvicorn src.api.main:app --reload
 # in another terminal:
 uv run streamlit run frontend/app.py
@@ -161,9 +161,7 @@ API: `http://localhost:8000` · Frontend: `http://localhost:8501`
 
 ## Current limitations
 
-- Docker and a one-command index build are deferred.
-- BNS section 303 currently spans a chunk boundary; the grounding checker safely refuses an
-  answer that needs the missing clause. The chunking repair and re-index are pending.
+- Docker packaging is deferred.
 - The full 50-scenario RAGAS run is still pending; the published RAGAS values cover three
   scenarios and are labeled as such above.
 
