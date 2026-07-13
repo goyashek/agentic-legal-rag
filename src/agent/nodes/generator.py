@@ -48,6 +48,8 @@ def generate_answer(
         messages=[{"role": "user", "content": prompt}],
         response_model=LegalAdvice,
         temperature=0,
+        # The final schema includes citations and can exceed the control-node cap.
+        max_tokens=1536,
     )
     # Pin the fields the pipeline owns, not the model.
     advice.query = query

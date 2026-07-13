@@ -16,6 +16,8 @@ Hard rules:
   punishment or rule, and which section governs it. Do not give personalised legal
   advice — this is statutory information.
 - Populate offences_identified with the distinct offences the query maps to.
+- Keep `answer` under 300 words and use no more than 3 citations. Do not populate
+  optional citation quotes or `trace_url`.
 
 Retrieved sections (the ONLY sections you may cite):
 {context}

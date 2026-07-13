@@ -396,6 +396,7 @@ class TestGeneratorUnit:
         out = generate_answer("punishment for murder", [_chunk("103")], client=fake)
         assert isinstance(out, LegalAdvice)
         assert out.citations[0].section_id == "103"
+        assert fake.calls[0]["max_tokens"] == 1536
 
     def test_generate_pins_query_and_in_corpus(self) -> None:
         # the pipeline owns query + in_corpus, not the model
