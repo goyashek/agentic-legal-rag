@@ -38,7 +38,7 @@ rewriting is still selectable for evaluation.
 
 - **Deterministic citation validator:** every cited `[Section, Act]` is verified to exist in the retrieved set (pure code, not an LLM).
 - **Exact-section fast path:** `"BNS 103"` / `"302 IPC"` resolve via direct metadata lookup, with IPC references bridged to BNS.
-- **Dense retrieval:** the default uses the highest-scoring dense-only setting, with no reranker.
+- **Dense retrieval:** the default uses the highest-scoring dense-only setting, with no reranker and a 12-chunk answer context.
 - **Experimental full graph:** intent expansion, grading, checking, and rewriting remain available for reproducible comparisons.
 - **Auditable by design:** answers carry structured citations and can include a LangSmith trace URL when tracing is configured.
 

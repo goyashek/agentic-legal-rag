@@ -120,6 +120,30 @@ class TestHybridRetrieverIntegration:
         headings = " ".join(r.chunk.heading.lower() for r in results)
         assert "theft" in headings
 
+    @pytest.mark.parametrize(
+        ("query", "expected_sections"),
+        [
+            (
+                "he beat me so badly with a rod that I permanently lost sight in one eye",
+                {"117"},
+            ),
+            (
+                "a witness deliberately lied under oath during my court case",
+                {"227", "229"},
+            ),
+            (
+                "he lunged to snatch a woman's chain but was caught before he could grab it",
+                {"62", "304"},
+            ),
+        ],
+    )
+    def test_audited_dense_cases_reach_the_context_window(
+        self, retriever, query, expected_sections
+    ) -> None:
+        results = retriever.retrieve(query, top_k=12, mode="dense")
+        found = {r.chunk.section_id for r in results if r.chunk.act == "BNS"}
+        assert expected_sections <= found
+
     def test_results_capped_at_top_k(self, retriever) -> None:
         assert len(retriever.retrieve("criminal breach of trust", top_k=5)) <= 5
 

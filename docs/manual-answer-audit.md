@@ -38,3 +38,16 @@ It should not run the grader, checker, or rewriter on every normal in-corpus
 question. The generator prompt now requires exact punishment bounds and whether
 a fine is mandatory or optional, and a key-free regression test covers the BNS
 314 source text. The simpler path is now the live default.
+
+## Retrieval follow-up
+
+The three missing provisions in this audit were retrieval-window failures, not
+index misses. A local dense check with `BAAI/bge-large-en-v1.5` and the rebuilt
+corpus ranked BNS 117 at 11 for s25, BNS 229 at 12 for s28, and BNS 62 at 10 for
+s50. BNS 304 was eighth for s50. The live path then kept only eight chunks for
+generation.
+
+The live context window is now 12 chunks. Key-free graph tests verify that cap,
+and local integration tests verify that all three scenarios reach the generator
+context. This is a three-query retrieval check, not a new RAGAS result and it
+used no LLM calls.

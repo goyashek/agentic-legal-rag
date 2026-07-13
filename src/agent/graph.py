@@ -35,9 +35,9 @@ RETRIEVAL_LOOP_BUDGET = 2
 RetrievalMode = Literal["hybrid", "dense", "sparse"]
 PipelineVariant = Literal["production", "baseline", "grader", "checker", "full"]
 
-# Retrieval knobs (mirror the baseline: 20 fused candidates -> rerank to 8).
+# Retrieval knobs: 20 candidates -> 12 chunks for answer generation.
 RETRIEVE_K = 20
-RERANK_K = 8
+CONTEXT_K = 12
 # The real Qdrant collection is "legal" (see src/retrieval/index.py + the on-disk
 # data/processed/qdrant/collection/legal). NOTE: .env.example still says
 # QDRANT_COLLECTION=bns_sections — that default is stale; the index build names it
@@ -214,9 +214,9 @@ def retrieve_node(
 
     deduped = _dedupe_by_chunk_id(pooled)
     ranked = (
-        reranker.rerank(state["query"], deduped, top_k=RERANK_K)
+        reranker.rerank(state["query"], deduped, top_k=CONTEXT_K)
         if use_reranker and reranker is not None
-        else deduped[:RERANK_K]
+        else deduped[:CONTEXT_K]
     )
 
     notes = state.get("trace_notes", [])

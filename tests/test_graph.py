@@ -214,6 +214,12 @@ class TestRetrieveNode:
         assert "dense" in out["trace_notes"][-1]
         assert "rerank" not in out["trace_notes"][-1]
 
+    def test_dense_mode_keeps_twelve_chunks_for_generation(self) -> None:
+        chunks = [_rc(f"BNS::{section}::0", 1.0 - section / 1000) for section in range(100, 113)]
+        retr = _FakeRetriever({"query": chunks})
+        out = retrieve_node({"query": "query"}, retriever=retr, mode="dense", use_reranker=False)
+        assert [c.chunk.section_id for c in out["retrieved"]] == [str(s) for s in range(100, 112)]
+
 
 class TestGraphCompiles:
     def test_build_graph_returns_compiled(self) -> None:
