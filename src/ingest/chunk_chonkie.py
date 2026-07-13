@@ -106,7 +106,35 @@ def chunk_sections(
         # Defamation, ~1940 tok). SemanticChunker returns [] on degenerate text, so
         # that also collapses to the whole section.
         if pieces and sum(p.token_count for p in pieces) > max_tokens:
-            bodies = [p.text for p in pieces]
+            # SemanticChunker can return tiny adjacent fragments even when they fit
+            # together. Repack those fragments up to the configured token budget so
+            # a legal sentence never ends up split merely because an illustration
+            # changed topic.
+            units: list[tuple[str, int]] = []
+            sentence: list[str] = []
+            sentence_tokens = 0
+            for piece in pieces:
+                sentence.append(piece.text)
+                sentence_tokens += piece.token_count
+                if piece.text.rstrip().endswith((".", "?", "!")):
+                    units.append((" ".join(sentence).strip(), sentence_tokens))
+                    sentence = []
+                    sentence_tokens = 0
+            if sentence:
+                units.append((" ".join(sentence).strip(), sentence_tokens))
+
+            bodies = []
+            current: list[str] = []
+            current_tokens = 0
+            for text, tokens in units:
+                if current and current_tokens + tokens > max_tokens:
+                    bodies.append(" ".join(current).strip())
+                    current = []
+                    current_tokens = 0
+                current.append(text)
+                current_tokens += tokens
+            if current:
+                bodies.append(" ".join(current).strip())
         else:
             bodies = [sec.text]
 

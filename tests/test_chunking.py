@@ -139,3 +139,12 @@ class TestChunkRealCorpus:
         per_sec = Counter((c.act, c.section_id) for c in chunks)
         single = sum(1 for v in per_sec.values() if v == 1)
         assert single / len(per_sec) > 0.85, f"only {single}/{len(per_sec)} sections stayed whole"
+
+    def test_bns_303_base_punishment_stays_in_one_chunk(self) -> None:
+        section = next(s for s in parse_statute(RAW / "bns.pdf", "BNS") if s.section_id == "303")
+        chunks = chunk_sections([section])
+        assert any(
+            "shall be punished with imprisonment of either description for a term"
+            " which may extend to three years" in " ".join(c.text.split())
+            for c in chunks
+        )
