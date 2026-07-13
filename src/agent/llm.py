@@ -8,6 +8,7 @@ tokens without improving the structured result.
 
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 from typing import Literal
@@ -80,6 +81,14 @@ class _ClientWrapper:
 
     async def _acreate(self, **kwargs):
         return await self._client.create(**kwargs)
+
+    async def aclose(self) -> None:
+        """Close an owned async instructor client before its event loop ends."""
+        if not self._is_async:
+            return
+        result = self._client.close()
+        if inspect.isawaitable(result):
+            await result
 
 
 def get_client(tier: Tier = "flash", *, async_client: bool = False):

@@ -74,6 +74,15 @@ class _AsyncRecorder:
         return "ok"
 
 
+class _AsyncCloseRecorder(_AsyncRecorder):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def test_wrapper_injects_cost_controls() -> None:
     raw = _Recorder()
     client = llm._ClientWrapper(raw, "deepseek-v4-flash", 256, is_async=False)
@@ -97,3 +106,10 @@ def test_async_wrapper_injects_cost_controls() -> None:
     client = llm._ClientWrapper(raw, "deepseek-v4-pro", 1024, is_async=True)
     assert asyncio.run(client.create(messages=[])) == "ok"
     assert raw.kwargs["max_tokens"] == 1024
+
+
+def test_async_wrapper_closes_its_raw_client() -> None:
+    raw = _AsyncCloseRecorder()
+    client = llm._ClientWrapper(raw, "deepseek-v4-flash", 256, is_async=True)
+    asyncio.run(client.aclose())
+    assert raw.closed is True

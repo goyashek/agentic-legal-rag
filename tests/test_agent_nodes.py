@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from src.agent.llm import has_api_key
+from src.agent.nodes import grader as grader_module
 from src.agent.nodes.checker import FaithfulnessVerdict, check_faithfulness, checker_node
 from src.agent.nodes.citation_validator import (
     citation_validator_node,
@@ -78,6 +79,7 @@ class _FakeAsyncGraderClient:
         self._by_section = by_section
         self._default = default
         self.n_calls = 0
+        self.closed = False
 
     async def create(self, *, messages, response_model, **kwargs):  # noqa: ANN001
         self.n_calls += 1
@@ -90,6 +92,9 @@ class _FakeAsyncGraderClient:
                 relevant = verdict
                 break
         return GradeVerdict(relevant=relevant)
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class _FakeRewriterClient:
@@ -324,6 +329,21 @@ class TestGraderUnit:
         fake = _FakeAsyncGraderClient({})
         assert grade_chunks("anything", [], client=fake) == []
         assert fake.n_calls == 0
+
+    def test_default_client_is_closed_before_its_event_loop_ends(self, monkeypatch) -> None:
+        fake = _FakeAsyncGraderClient({"103": True})
+        monkeypatch.setattr(grader_module, "get_client", lambda *_args, **_kwargs: fake)
+
+        grade_chunks("murder", [_chunk("103")])
+
+        assert fake.closed is True
+
+    def test_injected_client_stays_open_for_its_caller(self) -> None:
+        fake = _FakeAsyncGraderClient({"103": True})
+
+        grade_chunks("murder", [_chunk("103")], client=fake)
+
+        assert fake.closed is False
 
     def test_node_grade_pass_true_with_one_relevant_section(self) -> None:
         chunks = [_chunk("103"), _chunk("303"), _chunk("318")]

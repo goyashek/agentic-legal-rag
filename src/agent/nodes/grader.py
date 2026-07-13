@@ -62,9 +62,15 @@ async def _agrade_one(query: str, chunk: RetrievedChunk, client, sem: asyncio.Se
     return verdict.relevant
 
 
-async def _agrade_chunks(query: str, chunks: list[RetrievedChunk], client) -> list[bool]:
+async def _agrade_chunks(
+    query: str, chunks: list[RetrievedChunk], client, *, close_client: bool = False
+) -> list[bool]:
     sem = asyncio.Semaphore(_MAX_CONCURRENCY)
-    return await asyncio.gather(*(_agrade_one(query, c, client, sem) for c in chunks))
+    try:
+        return await asyncio.gather(*(_agrade_one(query, c, client, sem) for c in chunks))
+    finally:
+        if close_client:
+            await client.aclose()
 
 
 def grade_chunks(
@@ -82,10 +88,11 @@ def grade_chunks(
     # GRADER_TIER lets the grader run on a stronger tier than the other flash nodes.
     # Default "flash" = unchanged; "pro" was added when deepseek-v4-flash graded too
     # strictly (rejected clearly-relevant sections -> agent bailed to low-confidence).
-    if client is None:
+    close_client = client is None
+    if close_client:
         tier = os.getenv("GRADER_TIER", "flash").strip().lower()
         client = get_client("pro" if tier == "pro" else "flash", async_client=True)
-    verdicts = asyncio.run(_agrade_chunks(query, chunks, client))
+    verdicts = asyncio.run(_agrade_chunks(query, chunks, client, close_client=close_client))
     return [c for c, keep in zip(chunks, verdicts, strict=True) if keep]
 
 
