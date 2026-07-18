@@ -71,7 +71,7 @@ The intended contribution is not a novel component. It is the combination of sta
 
 ## Evaluation
 
-Every number below is labeled with the model that produced it. Historical runs stay labeled with their original model, and current work uses DeepSeek. Auditability is a first-class goal here, so the evaluation record stays honest about provenance and keeps its negative results.
+Every number below is labeled with the model that produced it. Historical runs stay labeled with their original model; changing the current routing aliases does not relabel them. Auditability is a first-class goal here, so the evaluation record stays honest about provenance and keeps its negative results.
 
 ### Retrieval (pure, model-agnostic, no LLM)
 
@@ -87,17 +87,20 @@ Post-repair baseline over the 50-scenario labeled set (`data/eval/scenarios.json
 
 The rebuilt corpus overturned my original hybrid assumption. Dense-only wins this retrieval-only set, and dense + reranker also beats hybrid + reranker. The node-level ablation and manual audit below both support dense without reranking as the live path. P@5 is low by construction, because most scenarios have one to three relevant sections, which caps a perfect single-answer at 0.20.
 
-### RAGAS (real generative task: DeepSeek Flash judge / Flash control nodes / Pro generator)
+### RAGAS (real generative task)
 
-All runs use a DeepSeek Flash judge with local BGE-small embeddings, Flash control nodes, and a Pro final generator. The first two rows are the older full self-correcting graph. The third is the **current live production path**: dense retrieval, generation, deterministic citation validation, and the scope and out-of-corpus controls, with no grader, checker, or rewrite loop.
+All runs use a DeepSeek Flash judge with local BGE-small embeddings. The first three rows used DeepSeek Flash control nodes and a DeepSeek Pro generator. The fourth tests the current low-cost routing setup: Mistral Small for control calls, NVIDIA Nemotron for answer generation, and paid DeepSeek Pro only when the NVIDIA route fails. The first two rows use the older full self-correcting graph. The last two use the simpler production pipeline with dense retrieval, generation, deterministic citation validation, and scope and out-of-corpus controls.
 
 | pipeline / retrieval | faithfulness | answer relevancy | context precision | context recall |
 |---|---:|---:|---:|---:|
 | full graph, dense, no reranker | 0.309 | 0.518 | 0.700 | 0.840 |
 | full graph, hybrid RRF + reranker | 0.314 | 0.386 | **0.709** | 0.732 |
-| **production, dense, no reranker** | **0.517** | **0.749** | 0.615 | **0.919** |
+| production, dense, no reranker, DeepSeek only | **0.517** | **0.749** | 0.615 | **0.919** |
+| production, dense, no reranker, current routing | 0.496 | 0.689 | 0.630 | 0.912 |
 
 Removing the checker and rewrite loop nearly doubled faithfulness (0.309 → 0.517) and answer relevancy (0.518 → 0.749) and lifted context recall to 0.919. Context precision dips (0.700 → 0.615) with the wider 12-chunk answer window. All 50 production scenarios returned a generated answer, and none fell back to the canned low-confidence reply that ended 13 to 20 scenarios in the full-graph runs. The 20-case node ablation and the ten-answer statute audit predicted this result, and the full production run confirmed it. Faithfulness at 0.517 is still middling, so this remains a local demo rather than a legal-answer service. See [the complete RAGAS record](docs/ragas-50-results.md).
+
+The current-routing run reused the same 50 scenarios. Mistral completed all 50 control calls. Answer generation recorded 46 successful Nemotron calls, 6 successful DeepSeek Pro fallbacks, and 4 failed Nemotron attempts; some scenarios generated more than once. Its saved trace has one low-confidence answer, no empty answers, and citations in all 50 rows. The final judge pass completed 200 paid DeepSeek Flash calls without a missing metric job. The result is a cost and architecture experiment, not a clean model comparison, because the control and answer models changed together. The exact model counts and difficulty slices are in [the complete RAGAS record](docs/ragas-50-results.md).
 
 ### MCQ external comparability: BhashaBench-Legal criminal slice (Cerebras `gpt-oss-120b`)
 
@@ -132,8 +135,10 @@ The citation validator has a deterministic regression test for a high-risk failu
 
 Docker packaging is deferred. Place the source PDFs named in Data & licensing under `data/raw/`. The command below regenerates the git-ignored corpus artifacts under `data/processed/`.
 
+The application exposes only two OpenAI-compatible model profiles: `easy` for bounded control tasks and `hard` for cited answer generation. RAGAS uses a third, separately pinned judge profile. The example configuration points these profiles at OmniRoute aliases, but each profile can instead use a direct provider or local server by changing its model, base URL, and API key. Provider fallback remains outside the application code.
+
 ```bash
-cp .env.example .env        # fill in DEEPSEEK_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
+cp .env.example .env        # fill in LLM_API_KEY, LANGSMITH_API_KEY, HF_TOKEN
 uv sync --all-extras
 uv run python -m src.retrieval.index
 uv run uvicorn src.api.main:app --reload
@@ -146,7 +151,7 @@ API: `http://localhost:8000` · Frontend: `http://localhost:8501`
 ## Current limitations
 
 - Docker packaging is deferred.
-- Production RAGAS-50 answer relevancy is decent (0.749), but faithfulness is still middling (0.517), so this remains a local demo rather than a legal-advice service.
+- The latest mixed-provider RAGAS-50 run scored 0.689 answer relevancy and 0.496 faithfulness, so this remains a local demo rather than a legal-advice service. The free NVIDIA judge is suitable for small development checks, but the valid full score still required the paid pinned DeepSeek Flash judge.
 
 ## Data & licensing
 

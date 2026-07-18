@@ -1,10 +1,12 @@
 # RAGAS results
 
-This records the two fresh runs over the 50 hand-labelled scenarios in
-`data/eval/scenarios.jsonl` (19 easy, 24 medium, 7 hard). Both runs used the
-same current full graph. They are diagnostics, not production-accuracy claims.
+This records the full runs over the 50 hand-labelled scenarios in
+`data/eval/scenarios.jsonl` (19 easy, 24 medium, 7 hard). The runs are
+diagnostics, not production-accuracy claims. Model provenance is part of each
+result because the latest routing experiment does not use the earlier
+DeepSeek-only answer path.
 
-## Run setup
+## Earlier DeepSeek-only setup
 
 - Agent: DeepSeek V4 Flash for routing, expansion, grading, rewriting, and
   checking. DeepSeek V4 Pro wrote the final answer. Thinking was disabled.
@@ -15,19 +17,24 @@ same current full graph. They are diagnostics, not production-accuracy claims.
 - Scoring: RAGAS `strictness=1` and eight judge workers. The output traces and
   score manifests are local evaluation artifacts and are not committed.
 
+The current-routing run has its own provenance below. It used a 4,096-token
+judge ceiling, two workers, and bounded retries so long metric responses and
+transient provider failures did not invalidate the saved answer collection.
+
 ## Overall scores
 
 The first two rows are the older full-graph runs (router + expander + grader +
-checker + rewrite loop). The third row is the **current live production path**
-(dense retrieval, no reranker, generate, deterministic citation validation, and
-the scope/OOD controls — no grader, checker, or rewrite loop). All three use the
-same 1,151-chunk corpus and the same 50 scenarios.
+checker + rewrite loop). The last two use the simpler production pipeline:
+dense retrieval, no reranker, generation, deterministic citation validation,
+and the scope/OOD controls. All four use the same 1,151-chunk corpus and the
+same 50 scenarios.
 
 | pipeline / retrieval | faithfulness | answer relevancy | context precision | context recall |
 |---|---:|---:|---:|---:|
 | full graph, dense, no reranker | 0.309 | 0.518 | 0.700 | 0.840 |
 | full graph, hybrid RRF + reranker | 0.314 | 0.386 | **0.709** | 0.732 |
-| **production, dense, no reranker** | **0.517** | **0.749** | 0.615 | **0.919** |
+| production, dense, no reranker, DeepSeek only | **0.517** | **0.749** | 0.615 | **0.919** |
+| production, dense, no reranker, current routing | 0.496 | 0.689 | 0.630 | 0.912 |
 
 The production path is the decisive result. Dropping the checker and rewrite loop
 nearly doubles faithfulness (0.309 → 0.517) and answer relevancy (0.518 → 0.749),
@@ -44,6 +51,42 @@ Provenance: judge and control nodes on `deepseek-v4-flash`, answers on
 returned a generated answer; none fell back to the canned low-confidence reply,
 unlike the full-graph runs where the checker-to-rewriter loop ended 13–20
 scenarios in low confidence.
+
+### Current routing run
+
+The 2026-07-18 run tested the two-tier routing setup rather than repeating the
+DeepSeek-only model assignment. `mistral/mistral-small-latest` completed all 50
+control calls. Answer generation recorded 46 successful
+`nvidia/nvidia/nemotron-3-ultra-550b-a55b` calls and 6 successful paid
+`deepseek/deepseek-v4-pro` fallback calls. NVIDIA also returned 4 failed
+attempts. A few graph paths generated more than once, so the 52 successful
+generation calls should not be read as 52 scenarios.
+
+The answer trace was saved before judging. It contains all 50 scenarios, one
+low-confidence answer, no empty answers, and citations in every row. The final
+judge pass reused that trace and made 200 successful paid
+`deepseek/deepseek-v4-flash` calls with no missing metric jobs. This matters for
+cost control because judge retries did not trigger another answer collection.
+
+The current-routing result is close to the older DeepSeek-only production run
+on context precision and recall, but lower on faithfulness and answer
+relevancy. It is not a clean model-quality comparison because both the control
+and answer models changed. It does show that the cheaper mixed route can finish
+the full workload while keeping paid Pro calls to fallback cases.
+
+| difficulty | faithfulness | answer relevancy | context precision | context recall |
+|---|---:|---:|---:|---:|
+| easy (19) | 0.445 | 0.670 | 0.622 | 0.982 |
+| medium (24) | 0.542 | 0.701 | 0.619 | 0.927 |
+| hard (7) | 0.474 | 0.697 | 0.692 | 0.670 |
+
+The NVIDIA Mistral Small 4 judge still works for a one-sample connectivity
+check, but it did not complete the full suite reliably. Long outputs truncated
+at smaller token ceilings. After that was raised, one upstream 502 put the only
+NVIDIA judge connection into cooldown and the remaining jobs failed. I deleted
+that partial score rather than reporting a mixed valid/invalid aggregate. The
+pinned NVIDIA alias remains useful for small development checks; the full valid
+run used the paid release judge.
 
 ### Production run difficulty slices
 
