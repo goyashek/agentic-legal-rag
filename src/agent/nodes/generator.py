@@ -1,6 +1,6 @@
-"""Answer generator. Pydantic-constrained cited advice via DeepSeek Pro.
+"""Answer generator. Pydantic-constrained cited advice via the hard tier.
 
-Builds the LegalAdvice output from the graded chunks through `get_client("pro")`.
+Builds the LegalAdvice output from the graded chunks through `get_client("hard")`.
 
 instructor returns citations as structured (act, section_id) pairs the
 deterministic citation validator (Fri) checks exactly. The prompt forbids citing
@@ -42,7 +42,7 @@ def generate_answer(
     returns). `query` and `in_corpus` are set deterministically after generation
     so the model can't drift them.
     """
-    client = client or get_client("pro")
+    client = client or get_client("hard")
     prompt = load_prompt("generator").format(query=query, context=_format_context(chunks))
     advice: LegalAdvice = client.create(  # type: ignore[attr-defined]
         messages=[{"role": "user", "content": prompt}],

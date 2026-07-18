@@ -1,7 +1,7 @@
 """Relevance grader. LLM-as-judge over the retrieved chunks, run in parallel.
 
 Grades each reranked chunk yes/no on whether it's actually relevant to the query
-(DeepSeek Flash, fired concurrently). If any chunk passes I move on to generation;
+(easy tier, fired concurrently). If any chunk passes I move on to generation;
 if none do, the graph kicks over to the rewriter for another retrieval loop (budget 2).
 
 The point is to stop generation from reasoning over context that's only
@@ -11,7 +11,7 @@ wrong-but-confident answer.
 The fan-out is real (one call per chunk, concurrent via asyncio), matching the
 "parallel over chunks" design — this is the biggest quota sink in the system, so
 ~8 calls per query against the free-tier cap. Client is injected (defaults to the
-shared async Flash client) so tests grade with a fake at zero quota.
+shared async easy client) so tests grade with a fake at zero quota.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from src.retrieval.hybrid import RetrievedChunk
 # section can answer a narrow question such as theft, especially after chunk repair.
 MIN_RELEVANT = 1
 
-# Cap concurrent grade calls so a wide candidate set can't burst past the flash-tier
+# Cap concurrent grade calls so a wide candidate set cannot burst past the easy-tier
 # RPM limit. 8 reranked chunks sit under it, but the semaphore keeps it safe if the
 # reranked set ever grows.
 _MAX_CONCURRENCY = 8
@@ -79,19 +79,17 @@ def grade_chunks(
     """Grade all chunks in parallel and keep only the relevant ones (order preserved).
 
     Runs the async fan-out to completion. `client` is an async instructor client
-    (its `.create` is awaited); defaults to the shared async Flash client. Errors
+    (its `.create` is awaited); defaults to the shared async easy client. Errors
     propagate — a quota/parse failure surfaces loudly rather than silently grading
     everything "not relevant" and firing a pointless rewrite loop.
     """
     if not chunks:
         return []
-    # GRADER_TIER lets the grader run on a stronger tier than the other flash nodes.
-    # Default "flash" = unchanged; "pro" was added when deepseek-v4-flash graded too
-    # strictly (rejected clearly-relevant sections -> agent bailed to low-confidence).
+    # The experimental grader stays cheap by default but can use the hard tier.
     close_client = client is None
     if close_client:
-        tier = os.getenv("GRADER_TIER", "flash").strip().lower()
-        client = get_client("pro" if tier == "pro" else "flash", async_client=True)
+        tier = os.getenv("GRADER_TIER", "easy").strip().lower()
+        client = get_client("hard" if tier == "hard" else "easy", async_client=True)
     verdicts = asyncio.run(_agrade_chunks(query, chunks, client, close_client=close_client))
     return [c for c, keep in zip(chunks, verdicts, strict=True) if keep]
 

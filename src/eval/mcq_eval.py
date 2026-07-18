@@ -76,9 +76,9 @@ class MCQResult:
     accuracy: float
     # the breakdown I actually care about
     criminal_slice_size: int
-    bridge_resolved: int          # questions whose repealed-IPC refs mapped to BNS
-    bridge_accuracy: float        # accuracy on just the bridge-dependent subset
-    baseline_accuracy: float | None = None   # same questions, no-RAG model for comparison
+    bridge_resolved: int  # questions whose repealed-IPC refs mapped to BNS
+    bridge_accuracy: float  # accuracy on just the bridge-dependent subset
+    baseline_accuracy: float | None = None  # same questions, no-RAG model for comparison
     # no-RAG on the bridge subset — the head-to-head that matters
     baseline_bridge_accuracy: float | None = None
 
@@ -175,7 +175,7 @@ def answer_mcq(
     if client is None:
         from src.agent.llm import get_client
 
-        client = get_client("flash")
+        client = get_client("easy")
 
     candidates = retriever.retrieve(question, top_k=retrieve_k)
     if reranker is not None:
@@ -215,7 +215,7 @@ def answer_mcq_no_rag(question: str, options: list[str], *, client=None) -> int:
     if client is None:
         from src.agent.llm import get_client
 
-        client = get_client("flash")
+        client = get_client("easy")
     numbered = "\n".join(f"{i}. {opt}" for i, opt in enumerate(options))
     prompt = (
         "Answer this Indian criminal-law multiple-choice question from your own knowledge.\n\n"
@@ -303,7 +303,7 @@ def run_mcq_eval(
     `slice_`/`mcq_fn`/`baseline_fn`/`ipc_bns_mapping` are injectable so the orchestration
     is unit-tested at zero quota; defaults load the gated slice + real stack. `limit`
     caps the run (the full slice is 1,825 * ~1 call each — pace against RPM 15). Paces
-    between questions to respect the flash-tier RPM wall.
+    between questions to respect the easy-tier RPM wall.
     """
     if slice_ is None:
         slice_ = load_bhashabench_criminal_slice(hf_token)

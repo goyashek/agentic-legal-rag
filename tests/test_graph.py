@@ -270,7 +270,7 @@ class TestFastPathEndToEnd:
 
 
 @pytest.mark.live
-@pytest.mark.skipif(not has_api_key(), reason="needs DEEPSEEK_API_KEY for a live DeepSeek call")
+@pytest.mark.skipif(not has_api_key(), reason="needs an easy-tier API key")
 class TestRouterEndToEnd:
     """Narrative query misses the fast path and flows through the live router."""
 
@@ -284,7 +284,7 @@ class TestRouterEndToEnd:
 @pytest.mark.live
 @pytest.mark.skipif(
     not (_have_full_index and has_api_key()),
-    reason="needs both the built Qdrant index and DEEPSEEK_API_KEY",
+    reason="needs the built Qdrant index plus easy and hard LLM access",
 )
 class TestCriminalBranchEndToEnd:
     """Production criminal path: router -> retrieve -> ood gate."""

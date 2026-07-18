@@ -1,4 +1,4 @@
-"""Query router. DeepSeek Flash classifier that runs once the fast path misses.
+"""Query router. Easy-tier classifier that runs once the fast path misses.
 
 Sorts the query into one of three routes:
   criminal            -> go on to intent expansion + retrieval
@@ -10,7 +10,7 @@ distance-based OOD gate (ood_gate.py) wrap around it, so this only fires when
 those two can't decide. I keep the prompt text in agent/prompts/ so it isn't
 buried in code.
 
-The LLM client is injected (defaults to the shared Flash client) so node logic
+The LLM client is injected (defaults to the shared easy client) so node logic
 is unit-testable with a fake client at zero quota; see tests/test_agent_nodes.py.
 """
 
@@ -40,13 +40,13 @@ class RouteDecision(BaseModel):
 
 
 def classify(query: str, *, client: object | None = None) -> Route:
-    """Return the route for a query. DeepSeek Flash, temperature 0 so it's stable.
+    """Return the route for a query. Easy tier, temperature 0 so it is stable.
 
     `client` is any object with `.create(messages=..., response_model=...)`
     returning a RouteDecision — the real instructor client by default, a fake in
     tests.
     """
-    client = client or get_client("flash")
+    client = client or get_client("easy")
     prompt = load_prompt("router").format(query=query)
     decision: RouteDecision = client.create(  # type: ignore[attr-defined]
         messages=[{"role": "user", "content": prompt}],

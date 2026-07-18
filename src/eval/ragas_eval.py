@@ -4,10 +4,10 @@ The 50 scenarios are my hand-labelled criminal-law prompts. I track faithfulness
 answer relevancy, context precision, and context recall, with a CI alert for a drop
 of more than five points from the recorded baseline.
 
-DeepSeek V4 Flash now has enough account-level concurrency that scenarios can run
-without the old artificial delay. The answer trace and optional score manifest make
-each paid evaluation reproducible. Unit tests still inject a fake answer function,
-and RAGAS remains a lazy import so they need neither an API key nor the package.
+The judge is a separate pinned OpenAI-compatible profile, so generator experiments
+do not silently change the ruler. The answer trace and optional score manifest make
+each run reproducible. Unit tests still inject a fake answer function, and RAGAS
+remains a lazy import so they need neither an API key nor the package.
 
 The scenarios contain gold section IDs rather than reference prose. For the two
 context metrics, `build_reference` joins the corresponding statutory chunks.
@@ -31,12 +31,24 @@ from src.eval.retrieval_baseline import load_scenarios  # same jsonl loader, don
 METRIC_NAMES = ("faithfulness", "answer_relevancy", "context_precision", "context_recall")
 
 # RAGAS answer-relevancy embeddings run locally, so evaluation makes no provider call beyond
-# DeepSeek's judge. Small keeps the evaluator light; override only when comparing models.
+# the pinned judge. Small keeps the evaluator light; override only when comparing models.
 _RAGAS_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
-# DeepSeek V4 allows 2,500 concurrent Flash requests per account. Eight workers
-# keep this evaluation comfortably below that ceiling while avoiding the former
-# serial 200-call judge run.
-RAGAS_MAX_WORKERS = 8
+
+
+def _ragas_max_workers() -> int:
+    """Keep hosted free-tier judges under their shared request limit."""
+    value = int(os.getenv("RAGAS_MAX_WORKERS", "2"))
+    if value < 1:
+        raise ValueError("RAGAS_MAX_WORKERS must be positive")
+    return value
+
+
+def _ragas_max_retries() -> int:
+    """Retry transient judge failures without changing the pinned model."""
+    value = int(os.getenv("RAGAS_JUDGE_MAX_RETRIES", "2"))
+    if value < 0:
+        raise ValueError("RAGAS_JUDGE_MAX_RETRIES cannot be negative")
+    return value
 
 
 class _LegacyEmbeddingAdapter:
@@ -70,24 +82,28 @@ def _shim_dead_vertexai_import() -> None:
 
 
 def _ragas_evaluator():
-    """Build DeepSeek judge + local embeddings for RAGAS without a second API provider."""
+    """Build the pinned judge plus local embeddings."""
     _shim_dead_vertexai_import()
     from langchain_openai import ChatOpenAI
     from ragas.embeddings import HuggingFaceEmbeddings
     from ragas.llms import LangchainLLMWrapper
 
-    from src.agent.llm import _max_tokens_for, _model_for, _resolve_key, _timeout_seconds
+    from src.agent.llm import _judge_profile
 
-    judge = ChatOpenAI(
-        model=_model_for("flash"),
-        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        api_key=_resolve_key(),
-        temperature=0,
-        max_tokens=_max_tokens_for("flash"),
-        timeout=_timeout_seconds(),
-        max_retries=0,
-        extra_body={"thinking": {"type": "disabled"}},
-    )
+    profile = _judge_profile()
+    judge_kwargs = {
+        "model": profile.model,
+        "base_url": profile.base_url,
+        "api_key": profile.api_key,
+        "temperature": 0,
+        "max_tokens": profile.max_tokens,
+        "timeout": profile.timeout,
+        "max_retries": _ragas_max_retries(),
+    }
+    if profile.disable_thinking:
+        judge_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    judge = ChatOpenAI(**judge_kwargs)
     return (
         LangchainLLMWrapper(judge),
         _LegacyEmbeddingAdapter(
@@ -201,6 +217,11 @@ def write_samples(rows: list[dict], path: str | Path) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def read_samples(path: str | Path) -> list[dict]:
+    """Load a saved collection so judge-only reruns do not regenerate answers."""
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines()]
+
+
 def write_scores(
     scores: RagasScores,
     path: str | Path,
@@ -211,14 +232,14 @@ def write_scores(
     samples_out: str | Path | None,
 ) -> None:
     """Persist the result with the model and retrieval settings that produced it."""
-    from src.agent.llm import _model_for
+    from src.agent.llm import _judge_model_for, _model_for
 
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "judge_model": _model_for("flash"),
-        "control_model": _model_for("flash"),
-        "answer_model": _model_for("pro"),
+        "judge_model": _judge_model_for(),
+        "control_model": _model_for("easy"),
+        "answer_model": _model_for("hard"),
         "retrieval_mode": retrieval_mode,
         "use_reranker": use_reranker,
         "pipeline": pipeline,
@@ -267,6 +288,7 @@ def run_ragas_eval(
     retrieval_mode: Literal["hybrid", "dense", "sparse"] = "hybrid",
     use_reranker: bool = True,
     pipeline: PipelineVariant = "full",
+    samples_in: str | Path | None = None,
     samples_out: str | Path | None = None,
     scores_out: str | Path | None = None,
 ) -> RagasScores:
@@ -275,20 +297,25 @@ def run_ragas_eval(
     Returns RagasScores incl. an easy/medium/hard breakdown so weak spots are visible.
     `ragas` is imported here (not module-load) so the keyless test suite doesn't need it.
     """
-    if scenarios is None:
-        scenarios = load_scenarios("data/eval/scenarios.jsonl")
-    if answer_fn is None:
-        from src.agent.graph import answer_query
+    if samples_in is not None:
+        rows = read_samples(samples_in)
+    else:
+        if scenarios is None:
+            scenarios = load_scenarios("data/eval/scenarios.jsonl")
+        if answer_fn is None:
+            from src.agent.graph import answer_query
 
-        def answer_fn(query: str):
-            return answer_query(
-                query,
-                retrieval_mode=retrieval_mode,
-                use_reranker=use_reranker,
-                pipeline=pipeline,
-            )
+            def answer_fn(query: str):
+                return answer_query(
+                    query,
+                    retrieval_mode=retrieval_mode,
+                    use_reranker=use_reranker,
+                    pipeline=pipeline,
+                )
 
-    rows = collect_samples(scenarios, answer_fn=answer_fn, corpus=corpus, pace_seconds=pace_seconds)
+        rows = collect_samples(
+            scenarios, answer_fn=answer_fn, corpus=corpus, pace_seconds=pace_seconds
+        )
     for row in rows:
         row["pipeline"] = pipeline
     if samples_out is not None:
@@ -303,11 +330,10 @@ def run_ragas_eval(
         faithfulness,
     )
 
-    # Bind the DeepSeek evaluator explicitly; ragas otherwise defaults to OpenAI.
+    # Bind the configured evaluator explicitly; ragas otherwise defaults to OpenAI.
     for metric in (faithfulness, answer_relevancy, context_precision, context_recall):
         metric.llm = llm
     answer_relevancy.embeddings = embeddings
-    # answer_relevancy defaults to strictness=3 -> asks the judge for n=3 generations, which
     # One generation keeps the judge compact; more self-consistency samples multiply cost.
     answer_relevancy.strictness = 1
 
@@ -317,7 +343,7 @@ def run_ragas_eval(
             for row in rows
         ]
     )
-    run_config = RunConfig(max_workers=RAGAS_MAX_WORKERS, timeout=600)
+    run_config = RunConfig(max_workers=_ragas_max_workers(), timeout=600)
     result = evaluate(
         dataset=dataset,
         metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
@@ -337,7 +363,7 @@ def run_ragas_eval(
             retrieval_mode=retrieval_mode,
             use_reranker=use_reranker,
             pipeline=pipeline,
-            samples_out=samples_out,
+            samples_out=samples_out or samples_in,
         )
     return scores
 
@@ -354,6 +380,7 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper
         default="full",
     )
     parser.add_argument("--samples-out", type=Path)
+    parser.add_argument("--samples-in", type=Path)
     parser.add_argument("--scores-out", type=Path)
     args = parser.parse_args()
 
@@ -361,6 +388,7 @@ def main() -> None:  # pragma: no cover - thin CLI wrapper
         retrieval_mode=args.mode,
         use_reranker=not args.no_rerank,
         pipeline=args.pipeline,
+        samples_in=args.samples_in,
         samples_out=args.samples_out,
         scores_out=args.scores_out,
     )

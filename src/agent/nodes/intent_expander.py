@@ -2,13 +2,13 @@
 
 A common legal failure: "someone broke into my house and stole my phone" involves
 house-trespass and theft, but top-k on the single query won't surface both. This node
-(DeepSeek Flash) pulls out the distinct offences and emits 3-5 parallel sub-queries, one
+The easy tier pulls out the distinct offences and emits 3-5 parallel sub-queries, one
 per offence. The retriever runs per sub-query and results get deduped.
 
 This is my fix for the cross-sectional reasoning problem, and the part that took me the
 longest to get right. Runs after the router classifies the query as `criminal`.
 
-Client is injected (defaults to the shared Flash client) so node logic is
+Client is injected (defaults to the shared easy client) so node logic is
 unit-testable with a fake client at zero quota; live tests gate on the DeepSeek key.
 """
 
@@ -51,7 +51,7 @@ def expand_intent(
     unchanged, since over-expanding only adds noise and cost. Falls back to the
     original query if the model returns nothing usable.
     """
-    client = client or get_client("flash")
+    client = client or get_client("easy")
     prompt = load_prompt("intent_expander").format(query=query, max_sub_queries=max_sub_queries)
     result: SubQueries = client.create(  # type: ignore[attr-defined]
         messages=[{"role": "user", "content": prompt}],

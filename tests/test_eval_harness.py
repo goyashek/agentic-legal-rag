@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from src.eval import mcq_eval, ragas_eval
 
 
@@ -91,8 +93,11 @@ class TestCollectSamples:
             return {"answer": _FakeAnswer(f"ans {q}"), "relevant_chunks": []}
 
         rows = ragas_eval.collect_samples(
-            scenarios, answer_fn=fake_answer, corpus=corpus,
-            pace_seconds=4.0, sleep=sleeps.append,
+            scenarios,
+            answer_fn=fake_answer,
+            corpus=corpus,
+            pace_seconds=4.0,
+            sleep=sleeps.append,
         )
         assert len(rows) == 2
         assert sleeps == [4.0]  # paced once (between), not before the first
@@ -102,8 +107,11 @@ class TestCollectSamples:
         sleeps: list[float] = []
         scenarios = [{"query": "q", "relevant_sections": [], "difficulty": "easy"}] * 3
         ragas_eval.collect_samples(
-            scenarios, answer_fn=lambda q: {"answer": _FakeAnswer("a")},
-            corpus=[], pace_seconds=0, sleep=sleeps.append,
+            scenarios,
+            answer_fn=lambda q: {"answer": _FakeAnswer("a")},
+            corpus=[],
+            pace_seconds=0,
+            sleep=sleeps.append,
         )
         assert sleeps == []
 
@@ -126,8 +134,14 @@ class TestCollectSamples:
 
         assert '"scenario_id": "s01"' in path.read_text()
 
+    def test_read_samples_restores_saved_rows(self, tmp_path) -> None:
+        path = tmp_path / "samples.jsonl"
+        ragas_eval.write_samples([{"scenario_id": "s01"}], path)
+        assert ragas_eval.read_samples(path) == [{"scenario_id": "s01"}]
+
     def test_write_scores_records_model_and_variant(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.setattr("src.agent.llm._model_for", lambda tier: f"deepseek-v4-{tier}")
+        monkeypatch.setattr("src.agent.llm._model_for", lambda tier: f"legal-{tier}")
+        monkeypatch.setattr("src.agent.llm._judge_model_for", lambda: "ragas-judge-dev")
         scores = ragas_eval.RagasScores(0.1, 0.2, 0.3, 0.4, 2, {"easy": {"faithfulness": 0.1}})
         out = tmp_path / "scores.json"
 
@@ -141,9 +155,9 @@ class TestCollectSamples:
         )
 
         assert json.loads(out.read_text()) == {
-            "judge_model": "deepseek-v4-flash",
-            "control_model": "deepseek-v4-flash",
-            "answer_model": "deepseek-v4-pro",
+            "judge_model": "ragas-judge-dev",
+            "control_model": "legal-easy",
+            "answer_model": "legal-hard",
             "retrieval_mode": "dense",
             "use_reranker": False,
             "pipeline": "baseline",
@@ -162,10 +176,20 @@ class TestCollectSamples:
 class TestAggregate:
     def test_means_and_per_difficulty(self) -> None:
         rows = [
-            {"faithfulness": 1.0, "answer_relevancy": 1.0, "context_precision": 1.0,
-             "context_recall": 1.0, "difficulty": "easy"},
-            {"faithfulness": 0.0, "answer_relevancy": 0.0, "context_precision": 0.0,
-             "context_recall": 0.0, "difficulty": "hard"},
+            {
+                "faithfulness": 1.0,
+                "answer_relevancy": 1.0,
+                "context_precision": 1.0,
+                "context_recall": 1.0,
+                "difficulty": "easy",
+            },
+            {
+                "faithfulness": 0.0,
+                "answer_relevancy": 0.0,
+                "context_precision": 0.0,
+                "context_recall": 0.0,
+                "difficulty": "hard",
+            },
         ]
         s = ragas_eval.aggregate(rows)
         assert s.faithfulness == 0.5 and s.n_scenarios == 2
@@ -175,10 +199,20 @@ class TestAggregate:
     def test_nan_is_skipped_not_counted_as_zero(self) -> None:
         nan = float("nan")
         rows = [
-            {"faithfulness": 1.0, "answer_relevancy": 1.0, "context_precision": 1.0,
-             "context_recall": 1.0, "difficulty": "easy"},
-            {"faithfulness": nan, "answer_relevancy": nan, "context_precision": nan,
-             "context_recall": nan, "difficulty": "easy"},
+            {
+                "faithfulness": 1.0,
+                "answer_relevancy": 1.0,
+                "context_precision": 1.0,
+                "context_recall": 1.0,
+                "difficulty": "easy",
+            },
+            {
+                "faithfulness": nan,
+                "answer_relevancy": nan,
+                "context_precision": nan,
+                "context_recall": nan,
+                "difficulty": "easy",
+            },
         ]
         # NaN dropped -> mean over the one real value = 1.0, not 0.5
         assert ragas_eval.aggregate(rows).faithfulness == 1.0
@@ -202,6 +236,22 @@ class TestLegacyEmbeddingAdapter:
 
         assert embeddings.embed_query("law") == [3.0]
         assert embeddings.embed_documents(["BNS", "BNSS"]) == [[3.0], [4.0]]
+
+
+class TestRagasWorkers:
+    def test_defaults_to_two_and_rejects_zero(self, monkeypatch) -> None:
+        monkeypatch.delenv("RAGAS_MAX_WORKERS", raising=False)
+        assert ragas_eval._ragas_max_workers() == 2
+        monkeypatch.setenv("RAGAS_MAX_WORKERS", "0")
+        with pytest.raises(ValueError, match="must be positive"):
+            ragas_eval._ragas_max_workers()
+
+    def test_judge_retries_default_to_two_and_reject_negative(self, monkeypatch) -> None:
+        monkeypatch.delenv("RAGAS_JUDGE_MAX_RETRIES", raising=False)
+        assert ragas_eval._ragas_max_retries() == 2
+        monkeypatch.setenv("RAGAS_JUDGE_MAX_RETRIES", "-1")
+        with pytest.raises(ValueError, match="cannot be negative"):
+            ragas_eval._ragas_max_retries()
 
 
 # ============================ MCQ (BhashaBench) ==============================
@@ -245,8 +295,10 @@ class TestAnswerMcq:
                 return mcq_eval._MCQChoice(answer_idx=99)  # model hallucinates OOB
 
         idx = mcq_eval.answer_mcq(
-            "q", ["a", "b", "c"],
-            retriever=_FakeRetriever(), client=_FakeClient(),
+            "q",
+            ["a", "b", "c"],
+            retriever=_FakeRetriever(),
+            client=_FakeClient(),
         )
         assert idx == 2  # clamped to last valid
 
@@ -255,9 +307,10 @@ class TestAnswerMcq:
             def create(self, **_):
                 return mcq_eval._MCQChoice(answer_idx=-5)
 
-        assert mcq_eval.answer_mcq(
-            "q", ["a", "b"], retriever=_FakeRetriever(), client=_FakeClient()
-        ) == 0
+        assert (
+            mcq_eval.answer_mcq("q", ["a", "b"], retriever=_FakeRetriever(), client=_FakeClient())
+            == 0
+        )
 
 
 class _FakeRetriever:
@@ -280,8 +333,8 @@ class TestComputeResult:
         res = mcq_eval.compute_result(self._slice(), preds, mapping)
         assert res.total == 3 and res.correct == 2
         assert abs(res.accuracy - 2 / 3) < 1e-9
-        assert res.bridge_resolved == 1          # only q1
-        assert res.bridge_accuracy == 1.0        # q1 predicted correctly
+        assert res.bridge_resolved == 1  # only q1
+        assert res.bridge_accuracy == 1.0  # q1 predicted correctly
         assert res.baseline_accuracy is None
 
     def test_baseline_included_when_given(self) -> None:
@@ -307,12 +360,12 @@ class TestRunAibeOrchestration:
         ]
         res = mcq_eval.run_mcq_eval(
             slice_=slice_,
-            mcq_fn=lambda q, opts: 0,          # always picks index 0
+            mcq_fn=lambda q, opts: 0,  # always picks index 0
             ipc_bns_mapping={"302": "103"},
             pace_seconds=4.0,
             sleep=sleeps.append,
             with_baseline=False,
         )
-        assert sleeps == [4.0]                  # paced once between the two
-        assert res.correct == 1                 # q1 (ans 0) right, q2 (ans 1) wrong
+        assert sleeps == [4.0]  # paced once between the two
+        assert res.correct == 1  # q1 (ans 0) right, q2 (ans 1) wrong
         assert res.bridge_resolved == 1

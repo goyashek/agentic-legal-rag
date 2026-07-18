@@ -58,7 +58,7 @@ def check_faithfulness(
     the boolean, so asking for arbitrary claim excerpts wastes tokens and can make
     a short structured response exceed its output limit.
     """
-    client = client or get_client("flash")
+    client = client or get_client("easy")
     prompt = load_prompt("checker").format(
         answer=answer.answer, context=_cited_context(answer, chunks)
     )

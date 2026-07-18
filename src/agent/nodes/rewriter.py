@@ -48,7 +48,7 @@ def rewrite_query(
     nudge retrieval toward the right neighborhood instead of the wrong one. Falls
     back to the original query if the model returns nothing usable.
     """
-    client = client or get_client("flash")
+    client = client or get_client("easy")
     prompt = load_prompt("rewriter").format(
         query=query,
         reason=reason,
