@@ -35,6 +35,7 @@ data/eval/*
 
 # --- local qdrant storage (if bind-mounted) ---
 qdrant_storage/
+/omni/
 
 # --- os ---
 .DS_Store
